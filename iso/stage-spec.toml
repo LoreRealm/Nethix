@@ -1,0 +1,46 @@
+# stage-spec — packages and files that make up the live ISO's root.
+
+[packages]
+base = [
+    "sys-apps/systemd",
+    "sys-apps/baselayout",
+    "sys-kernel/nethix-sources",
+    "sys-kernel/dracut",
+    "app-shells/bash",
+    "app-editors/micro",
+    "net-misc/networkmanager",
+    "sys-block/fdisk",
+]
+plasma = [
+    "kde-plasma/plasma-meta",
+    "kde-apps/konsole",
+    "kde-apps/dolphin",
+    "x11-misc/sddm",
+]
+installer = [
+    # Provided by the CI-built summon artifacts; injected at ISO build,
+    # not emerged (they aren't in the tree). Place in /usr/local/bin.
+]
+aux = [
+    "app-misc/fastfetch",
+    "app-portage/eix",
+]
+
+[services]
+enabled = [
+    "NetworkManager",
+    "sshd",        # convenience for remote debugging live sessions
+    "sddm",
+]
+
+[liveuser]
+username = "liveuser"
+autologin = true
+copy_dotfiles_from = "configs/"
+
+[files]
+"configs/fastfetch/nethix-pathfinder.jsonc" = "/home/liveuser/.config/fastfetch/config.jsonc"
+
+# Note: binaries summon/summon-exec/forge/scri are copied from
+# ./out/installer-dist/ (uploaded by build-installer workflow) into
+# the live root's /usr/local/bin and PATH.
