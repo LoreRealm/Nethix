@@ -1,0 +1,9 @@
+# curated set: Plasma 6 desktop
+kde-plasma/plasma-meta
+media-sound/pipewire
+sys-boot/grub:2
+sys-fs/btrfs-progs
+app-admin/sudo
+kde-plasma/sddm
+net-misc/networkmanager
+sys-kernel/linux-firmware

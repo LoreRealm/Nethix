@@ -1,0 +1,20 @@
+name: build-binhost
+on:
+  schedule: [{cron: "0 4 * * *"}]
+  workflow_dispatch: {}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: gentoo/stage3:amd64
+    steps:
+      - uses: actions/checkout@v4
+      - name: prep portage
+        run: |
+          emerge-webrsync || true
+          cp profiles.d/makeconf.amd64-v3 /etc/portage/make.conf
+      - name: build pkgs
+        run: bash binhost/build-binhost.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nethix-binhost-v3
+          path: out/

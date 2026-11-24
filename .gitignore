@@ -1,0 +1,10 @@
+# Nethix
+
+Private WIP. Gentoo packages, CachyOS-style ergonomics:
+- BORE/Cachy flavored kernel ebuild
+- x86-64-v3 / v4 tuned profiles + curated binhost
+- `cantrip-install` — Rust GUI installer (Plasma 6 default)
+- `cantrip-hwdetect` — chwd-style automatic hardware detection
+- `cantrip-*` command suite (named for level-0 spells: tiny, reusable, no mana cost)
+
+NOT a package fork. Everything resolves against ::gentoo + GURU.
