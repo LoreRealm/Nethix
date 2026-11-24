@@ -10,8 +10,8 @@ pub struct Listing {
     pub name: String,
     pub summary: String,
     pub popularity: u64,
-    /// Non-empty for AUR listings with HIGH-severity risk findings;
-    /// Spire refuses to install these without the user opening a review screen first.
+    /// Non-empty for AUR listings with risk signals;
+    /// HIGH-severity findings refuse to install from Spire directly.
     pub risk_note: Option<String>,
 }
 
@@ -42,7 +42,7 @@ impl Backend for ScriBackend {
     }
 
     async fn search(&self, q: &str) -> Result<Vec<Listing>> {
-        let results = scri_lib::aur::search(q)?;
+        let results = scri::aur::search(q)?;
         Ok(results
             .into_iter()
             .map(|r| Listing {
@@ -50,27 +50,26 @@ impl Backend for ScriBackend {
                 name: r.name,
                 summary: r.description.unwrap_or_default(),
                 popularity: r.num_votes as u64,
-                // Full risk assessment happens at install time; orphan hint upfront.
                 risk_note: r.maintainer.is_none().then(|| "orphaned".to_string()),
             })
             .collect())
     }
 
     async fn install(&self, id: &str) -> Result<()> {
-        let pb = scri_lib::aur::pkgbuild(id)?;
-        let report = scri_lib::risk::assess(&pb);
+        let pb = scri::aur::pkgbuild(id)?;
+        let report = scri::risk::assess(&pb);
         if report
             .findings
             .iter()
-            .any(|f| f.severity == scri_lib::risk::Severity::High)
+            .any(|f| f.severity == scri::risk::Severity::High)
         {
             anyhow::bail!(
                 "HIGH-severity risk findings — run `scri review {}` and confirm",
                 id
             );
         }
-        let eb = scri_lib::convert::to_ebuild(&pb)?;
-        scri_lib::convert::install_via_portage(&pb, &eb, true)
+        let eb = scri::convert::to_ebuild(&pb)?;
+        scri::convert::install_via_portage(&pb, &eb, true)
     }
 }
 
@@ -111,8 +110,7 @@ impl Backend for FlatpakBackend {
 }
 
 fn tokio_shim(cmd: &str) -> Result<String> {
-    // Sequential search/install runs on iced's Task::perform thread; blocking is
-    // fine for v1 since only one runs at a time and UI stays responsive elsewhere.
+    // Blocking is fine for v1: one op at a time, UI stays responsive.
     let out = std::process::Command::new("sh")
         .arg("-c")
         .arg(cmd)

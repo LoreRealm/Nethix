@@ -124,7 +124,7 @@ fn view(state: &State) -> Element<'_, Msg> {
                 iced::widget::row![
                     text(format!("popularity: {}", l.popularity)).size(11),
                     match &l.risk_note {
-                        Some(note) => text(format!("⚠ risk: {note}")).size(11),
+                        Some(note) => text(format!("risk: {note}")).size(11),
                         None => text("").size(11),
                     },
                     button("Install").on_press(Msg::Install(l.id.clone())),
