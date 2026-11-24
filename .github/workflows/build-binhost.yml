@@ -7,7 +7,7 @@ jobs:
     runs-on: ubuntu-latest
     container: gentoo/stage3:amd64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: prep portage
         run: |
           emerge-webrsync || true
