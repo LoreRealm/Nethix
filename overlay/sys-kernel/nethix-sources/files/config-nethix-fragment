@@ -1,0 +1,21 @@
+# Nethix kernel config fragment (baseline, on top of gentoo defaults)
+# Applied as 0002-cachy-default-config.patch upstream style, or via savedconfig.
+CONFIG_LOCALVERSION="-nethix"
+CONFIG_DEFAULT_HOSTNAME="nethix"
+CONFIG_HIGH_RES_TIMERS=y
+CONFIG_NO_HZ_FULL=y
+CONFIG_PREEMPT=y
+CONFIG_HZ_1000=y
+# zstd everywhere (initramfs, kernel, modules)
+CONFIG_BLK_DEV_ZONED=y
+CONFIG_KERNEL_ZSTD=y
+CONFIG_MODULE_COMPRESS_ZSTD=y
+CONFIG_RD_ZSTD=y
+# schedulers/IO
+CONFIG_IOSCHED_BFQ=y
+CONFIG_CGROUP_PIDS=y
+# gaming/desktop niceties
+CONFIG_DMA_SHARED_BUFFER=y
+CONFIG_DRM_AMDGPU=y
+CONFIG_DRM_I915=y
+CONFIG_NOUVEAU=y
