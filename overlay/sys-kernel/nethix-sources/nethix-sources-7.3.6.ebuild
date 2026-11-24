@@ -2,31 +2,53 @@
 # Distributed under the terms of the GNU General Public License v2
 
 EAPI=8
+K_NOINSTALL_MODULES=yes
 
-K_NOUSEATOMICAKFS=1
-inherit kernel-build
+inherit kernel-build toolchain-funcs
 
-MY_P="cachyos-${PV}"
-DESCRIPTION="Nethix kernel: CachyOS fork (EEVDF + Cachy Sauce), hermetically pinned"
+MY_PV="cachyos-${PV}-1"
+MY_P="linux-${MY_PV}"
+
+DESCRIPTION="Nethix kernel: CachyOS fork (EEVDF, Cachy Sauce), hermetically hash-pinned"
 HOMEPAGE="https://github.com/CachyOS/linux"
-SRC_URI="${CATEGORY}/${PN}/files/${PV}/cachyos-${PV}-${PR/-/_}.tar.gz -> ${MY_P}.tar.gz"
+SRC_URI="https://github.com/CachyOS/linux/releases/download/${MY_PV}/${MY_PV}.tar.gz -> ${MY_P}.tar.gz"
 S="${WORKDIR}/${MY_P}"
 
+LICENSE="GPL-2"
 KEYWORDS="~amd64"
 IUSE="debug"
 
-# The shipped CachyOS config, committed alongside the tarball
-CONFIG_URI=""
+BDEPEND="
+    app-arch/xz-utils
+    dev-util/pahole
+    sys-devel/bc
+    sys-devel/flex
+    virtual/libelf
+    virtual/rust
+    llvm-core/clang
+    llvm-core/lld
+"
 
-depend() {
-    :
-}
-
-depend_rdepend() {
-    :
-}
+# CachyOS's shipped config, hash-pinned in files/ via Manifest
+CONFIG_FILE="${FILESDIR}/config-cachyos"
 
 pkg_setup() {
-    ewarn "Building nethix-sources uses the CachyOS shipped config from"
-    ewarn "files/${PV}/config-cachyos. Overrides not yet supported."
+    ewarn "Using the CachyOS shipped config (config-cachyos)."
+    ewarn "Local customization: emerge with _use_current-style edits via /etc/portage/savedconfig later."
+}
+
+src_prepare() {
+    default
+    # Ship the pinned CachyOS config as the base .config
+    cp "${CONFIG_FILE}" "${S}/.config" || die "failed to install config"
+    # Match CachyOS's localversion treatment so modules land under
+    # /lib/modules/<ver>-cachyos, like the upstream package
+    echo "-1" > "${S}/localversion.10-pkgrel"
+    echo "-cachyos" > "${S}/localversion.20-pkgname"
+    MAKEARGS+=(LLVM=1 LLVM_IAS=1)
+}
+
+pkg_postinst() {
+    kernel-build_pkg_postinst
+    einfo "nethix-sources installed. Rebuild bootloader config via cantrip-kernel."
 }
