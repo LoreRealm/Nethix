@@ -19,16 +19,17 @@ const MKDEP_MAP: &[(&str, &str)] = &[
 ];
 
 fn map_deps(deps: &[String]) -> String {
-    deps.iter().map(|d| {
-        match MKDEP_MAP.iter().find(|(arch, _)| arch == d) {
+    deps.iter()
+        .map(|d| match MKDEP_MAP.iter().find(|(arch, _)| arch == d) {
             Some((_, g)) => g.to_string(),
             None => fallback_map(d),
-        }
-    }).collect::<Vec<_>>().join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
-/// Heuristic mapping for unmapped Arch packages.n fallback_map(d: &str) -> String {
-    // crude: split 'name-version-suffix' and try category guesses
+/// Heuristic mapping for unmapped Arch packages.
+fn fallback_map(d: &str) -> String {
     // TODO: grow this into a real database; consult GURU for known translations
     d.to_string()
 }
@@ -94,7 +95,6 @@ pub fn install_via_portage(pb: &Pkgbuild, ebuild_src: &str, assume_yes: bool) ->
         ))?;
     }
 
-    // repoman/manifest skipped for scratch; emerge with --assume-clean-ish flags
     let st = std::process::Command::new("emerge")
         .args(["--ask=n", &format!("{cat}/{}", pb.pkgname)])
         .status()
