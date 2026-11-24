@@ -3,20 +3,13 @@
 //! Scrapes the AUR RPC for any package, converts PKGBUILD -> ephemeral ebuild,
 //! lets the user REVIEW (not edit — read-only preview) the generated ebuild
 //! plus a risk report, then builds via portage in a scratch overlay.
-//!
-//! Safety model (per design):
-//!  - never redistributes: only the local user fetches AUR metadata/build
-//!  - never lets the user hand-edit the generated ebuild (defeats the audit
-//!    trail; review is informational, changes happen by adjusting scri config)
-//!  - flags: new/unmaintained, votes/ratio, suspicious PKGBUILD patterns
-//!
-//! CLI: `scri search <q> | scri info <pkg> | scri install <pkg> [--yes]`
 
 mod aur;
 mod convert;
 mod risk;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
+use clap::Parser;
 
 #[derive(clap::Subcommand, Debug)]
 enum Cmd {
@@ -70,7 +63,7 @@ fn main() -> Result<()> {
                 bail!("HIGH-severity risk findings; rerun with --yes to accept, or run `scri review {}` first", pkg);
             }
             let eb = convert::to_ebuild(&pb)?;
-            convert::install_via_portage(&pb, &eb, yes)
+            return convert::install_via_portage(&pb, &eb, yes);
         }
     }
     Ok(())

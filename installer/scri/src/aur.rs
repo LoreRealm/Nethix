@@ -1,6 +1,6 @@
 //! AUR RPC client + PKGBUILD fetching.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use serde::Deserialize;
 
 const RPC: &str = "https://aur.archlinux.org/rpc/v5/";
@@ -53,7 +53,6 @@ pub fn pkgbuild(pkg: &str) -> Result<Pkgbuild> {
     info(pkg)?.with_context(|| format!("AUR package not found: {pkg}"))
 }
 
-// tiny percent-encode to avoid an extra dep
 fn urlencoding_lite(s: &str) -> String {
     s.bytes().map(|b| {
         if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
@@ -70,6 +69,7 @@ struct RpcResp<T> {
     version: u8,
     #[allow(dead_code)]
     r#type: String,
+    #[allow(dead_code)]
     resultcount: u32,
     results: Vec<T>,
 }
