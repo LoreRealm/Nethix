@@ -5,7 +5,7 @@
 #   1. chroot prep (stage3 download, bind mounts, resolv.conf)
 #   2. overlay + profile injection
 #   3. emerge live set
-#   4. installer binaries — pulled from nethix-artifacts repo (no local dir needed)
+#   4. installer binaries — pulled from nethix-artifacts repo (public)
 #   5. liveuser
 #   6. kernel + initramfs (dracut) install to boot/
 #   7. squashfs + xorriso into ISO
@@ -70,16 +70,17 @@ fi
 # --- 3. emerge minimal live set (alpha: no Plasma yet)
 say "emerging minimal live set..."
 chroot "$WORK/root" /bin/bash -c '
+    set -e
     emerge-webrsync || emerge --sync || true
     emerge --ask=n --autounmask-write app-misc/fastfetch || true
 '
 
-# --- 4. installer binaries from artifacts repo
+# --- 4. installer binaries from artifacts repo (public)
 say "fetching installer binaries from $ARTIFACTS_REPO (latest release)..."
 if curl -fsSL -o "$WORK/artifacts.zip" \
      "https://github.com/$ARTIFACTS_REPO/releases/latest/download/$ARTIFACTS_ASSET"; then
     mkdir -p "$WORK/root/usr/local/bin"
-    unzip -o -j "$WORK/artifacts.zip" \*summon\* \*forge\* \*scri\* \
+    unzip -o -j "$WORK/artifacts.zip" \*summon \*summon-exec \*forge \*scri \
         -d "$WORK/root/usr/local/bin/" \
     || say "WARN: artifacts.zip downloaded but expected binaries not found inside"
 else
@@ -89,7 +90,14 @@ fi
 # --- 5. liveuser
 say "creating liveuser..."
 chroot "$WORK/root" /bin/bash -c '
-    useradd -m -G wheel,audio,video,plugdev liveuser
+    set -e
+    # Gentoo stage3 has no plugdev; use the groups it actually ships
+    GROUPS_OK=""
+    for g in wheel audio video tty usb cdrom; do
+        getent group "$g" >/dev/null && GROUPS_OK+="$g,"
+    done
+    GROUPS_OK=${GROUPS_OK%,}
+    useradd -m -G "$GROUPS_OK" -s /bin/bash liveuser
     echo "liveuser:liveuser" | chpasswd
 '
 
@@ -133,21 +141,20 @@ EOF
 # Standalone grub images (EFI + BIOS) carrying the live config
 chroot "$WORK/root" grub-mkstandalone \
     -O x86_64-efi -o /tmp/nethix-efi.img \
-    "boot/grub/grub.cfg=/tmp/grub-live.cfg" \
+    "boot/grub/grub.cfg=$WORK/iso-root/grub-live.cfg" \
 || die "grub-mkstandalone EFI failed (is sys-boot/grub emerged in the chroot?)"
 chroot "$WORK/root" grub-mkstandalone \
     -O i386-pc -o /tmp/nethix-bios.img \
-    "boot/grub/grub.cfg=/tmp/grub-live.cfg" \
+    "boot/grub/grub.cfg=$WORK/iso-root/grub-live.cfg" \
 || die "grub-mkstandalone BIOS failed"
 cp "$WORK/root/tmp/nethix-efi.img" "$WORK/iso-root/efi-boot.img"
 cp "$WORK/root/tmp/nethix-bios.img" "$WORK/iso-root/bios-boot.img"
 
 xorriso -as mkisofs -iso-level 3 -volid NETHIX_LIVE \
     -o "$REPO_ROOT/$OUT_ISO" \
-    -eltorito-boot bios-boot.img -no-emul-boot \
-    -append-partition 2 -append-partition 2 2>/dev/null \
-    efi-boot.img \
-    vmlinuz initramfs.img live.squashfs 
+    -b bios-boot.img -no-emul-boot \
+    --efi-boot efi-boot.img \
+    vmlinuz initramfs.img live.squashfs grub-live.cfg
 
 die_if_missing() { [[ -f "$REPO_ROOT/$OUT_ISO" ]] || die "ISO output missing"; }
 die_if_missing
