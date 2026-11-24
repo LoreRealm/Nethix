@@ -26,8 +26,6 @@ enum Step {
 }
 
 // iced 0.14: application(boot, update, view) operates on a separate State type.
-struct App;
-
 #[derive(Debug, Clone)]
 struct State {
     step: Step,
@@ -80,9 +78,32 @@ fn view(state: &State) -> Element<'_, Msg> {
         ]
         .spacing(10)
         .into(),
-        Step:: done_placeholder_ignore, 2) unreachable arm placeholder.
+        Step::Account => column![
+            text_input("hostname", &state.plan.hostname).on_input(Msg::HostnameChanged),
+            text_input("username", &state.plan.username).on_input(Msg::UserChanged),
+        ]
+        .spacing(10)
+        .into(),
+        Step::Ready => column![
+            text(format!(
+                "About to install onto {} ({}). This will erase the disk!",
+                state.plan.target_disk, state.plan.filesystem
+            )),
+            button("Install").on_press(Msg::StartInstall),
+        ]
+        .spacing(10)
+        .into(),
+        Step::Running => text("Installing... (TODO: stream exec output)").into(),
     };
-    todo!("view target/account/ready/running arms")
+    column![
+        title,
+        body,
+        button("Back").on_press(Msg::Back),
+        button("Next").on_press(Msg::Next)
+    ]
+    .padding(20)
+    .spacing(10)
+    .into()
 }
 
 fn write_plan(state: &State) -> Task<Msg> {
