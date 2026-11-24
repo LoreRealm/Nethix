@@ -1,0 +1,23 @@
+name: ci-watchdog
+on:
+  schedule:
+    - cron: "0 * * * *"   # hourly
+  workflow_dispatch: {}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: build workspace
+        run: cargo test && cargo build --release
+        working-directory: installer
+      - name: report failure
+        if: failure()
+        run: |
+          gh issue create \
+            --repo LoreRealm/nethix \
+            --title "CI failed (${GITHUB_SHA::7})" \
+            --body "Automated failure report. Log tail: see run ${{ github.run_id }} at ${{ github.server_url }}/LoreRealm/nethix/actions/runs/${{ github.run_id }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
