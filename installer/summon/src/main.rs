@@ -121,7 +121,19 @@ impl App {
     }
 }
 
+// iced 0.14: Program supplies update/view; application() takes a BootFn.
+impl iced::Program for App {
+    type Message = Msg;
+
+    fn update(&mut self, msg: Self::Message) -> Task<Self::Message> {
+        App::update(self, msg)
+    }
+
+    fn view(&self) -> Element<'_, Self::Message> {
+        App::view(self)
+    }
+}
+
 fn main() -> iced::Result {
-    iced::application("Summon — Nethix installer", App::update, App::view)
-        .run_with(|| (App::new(), Task::none()))
+    iced::application(App::new).title("Summon — Nethix installer").run()
 }
