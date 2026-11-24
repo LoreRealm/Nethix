@@ -8,6 +8,3 @@ iced = "0.13"
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
-
-[dev-dependencies]
-tempfile = "3"

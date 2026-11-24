@@ -41,21 +41,7 @@ impl App {
         }
     }
 
-    fn write_plan(&self) -> Task<Msg> {
-        let toml = self.plan.to_toml().unwrap_or_default();
-        Task::perform(
-            async move {
-                std::fs::create_dir_all("/var/lib/nethix").ok();
-                std::fs::write("/var/lib/nethix/cantrip-install-plan.toml", toml).ok();
-            },
-            |_| Msg::Next,
-        )
-    }
-}
-
-impl iced::Program for App {
-    type Message = Msg;
-
+    // iced 0.13: update/view are plain methods consumed by iced::application(...)
     fn update(&mut self, msg: Msg) -> Task<Msg> {
         match msg {
             Msg::Next => {
@@ -96,13 +82,18 @@ impl iced::Program for App {
         let body: Element<Msg> = match self.step {
             Step::Welcome => text("Welcome to Nethix (KDE Plasma 6)").into(),
             Step::Target => column![
-                text_input("target disk (e.g. /dev/nvme0n1)", &self.plan.target_disk).on_input(Msg::DiskChanged),
+                text_input("target disk (e.g. /dev/nvme0n1)", &self.plan.target_disk)
+                    .on_input(Msg::DiskChanged),
                 fs_pick,
-            ].spacing(10).into(),
+            ]
+            .spacing(10)
+            .into(),
             Step::Account => column![
                 text_input("hostname", &self.plan.hostname).on_input(Msg::HostnameChanged),
                 text_input("username", &self.plan.username).on_input(Msg::UserChanged),
-            ].spacing(10).into(),
+            ]
+            .spacing(10)
+            .into(),
             Step::Ready => column![
                 text(format!(
                     "About to install onto {} ({}). This will erase the disk!",
@@ -113,13 +104,31 @@ impl iced::Program for App {
                     }
                 )),
                 button("Install").on_press(Msg::StartInstall),
-            ].spacing(10).into(),
+            ]
+            .spacing(10)
+            .into(),
             Step::Running => text("Installing... (TODO: stream exec output)").into(),
         };
-        column![title, body, button("Back").on_press(Msg::Back), button("Next").on_press(Msg::Next)]
-            .padding(20)
-            .spacing(10)
-            .into()
+        column![
+            title,
+            body,
+            button("Back").on_press(Msg::Back),
+            button("Next").on_press(Msg::Next)
+        ]
+        .padding(20)
+        .spacing(10)
+        .into()
+    }
+
+    fn write_plan(&self) -> Task<Msg> {
+        let toml = self.plan.to_toml().unwrap_or_default();
+        Task::perform(
+            async move {
+                std::fs::create_dir_all("/var/lib/nethix").ok();
+                std::fs::write("/var/lib/nethix/cantrip-install-plan.toml", toml).ok();
+            },
+            |_| Msg::Next,
+        )
     }
 }
 
