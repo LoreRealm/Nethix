@@ -14,7 +14,7 @@ jobs:
           cp profiles.d/makeconf.amd64-v3 /etc/portage/make.conf
       - name: build pkgs
         run: bash binhost/build-binhost.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: nethix-binhost-v3
           path: out/
