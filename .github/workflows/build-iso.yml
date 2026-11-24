@@ -1,0 +1,33 @@
+name: build-iso
+# Dispatch-only: never runs automatically. Click "Run workflow" in the Actions
+# tab to trigger; disable the workflow afterwards if you want it fully inert.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y squashfs-tools xorriso curl tar dosfstools
+
+      - name: Build the ISO
+        run: |
+          chmod +x iso/build.sh
+          sudo ./iso/build.sh
+
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nethix-live-iso
+          path: iso/*.iso
+          if-no-files-found: error
+          retention-days: 90
