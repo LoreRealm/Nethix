@@ -6,10 +6,12 @@ Move done items to the bottom section, don't delete (history matters).
 
 ## Open
 
-- [ ] Spire: GUI app store (iced) — flatpaks + scri/AUR backend in one interface; Bazaar-style browsing; scri becomes its CLI engine
+- [ ] Limine as default bootloader (systemd-boot as install-time option): swap grub paths in exec.rs for limine, write limine.conf generator, hook regeneration into cantrip-kernel
+- [ ] Spire: GUI app store (iced) — flatpaks + scri/AUR backend in one interface; Bazaar-style browsing; scri becomes its CLI engine. I (Lumo) build BOTH backends incl. flatpak
 - [ ] cantrip-update: interactive TUI updater (preview -uDN @world, per-block confirm, binhost-aware, never interrupt emerge mid-transaction)
 - [ ] Rework fetch-cachy-patches.sh: parse CachyOS PKGBUILD source=() array for patch URLs (EEVDF era, no fixed bore patch), pull their `config` as kernel config base
 - [ ] USE flag UI: graphical/interactive interface for viewing/deciding USE flags per package with descriptions and presets (desktop/gaming/minimal) — integrate into Spire or summon
+- [ ] Nethix fastfetch config: fantasy/pathfinder-themed (ASCII banner, parchment-tone palettes, lore-style labels — e.g. "Party" for users, "Spellbook" for kernel, "Quests" for services)
 - [ ] Implement `cantrip-kernel` (rebuild nethix-sources + reinstall)
 - [ ] Live ISO pipeline: catalyst config or squashfs script, Plasma autostart of summon
 - [ ] Binhost workflow: confirm it produces usable Packages index, publish as release asset
@@ -21,6 +23,11 @@ Move done items to the bottom section, don't delete (history matters).
 - [ ] scri: interactive TTY review confirm (install currently requires --yes)
 - [ ] scri: real Arch→Gentoo dep mapping database (fallback_map is a stub)
 - [ ] License decision before public release (GPL-3 recommended, Gentoo-derived)
+
+## Decisions
+
+- Init: **systemd** (CachyOS parity, Plasma 6 upstream default, stage3 already systemd-flavored). Gentoo-ness is preserved via portage/USE/overlays.
+- Bootloader: **Limine default**, systemd-boot optional (Limine is init-agnostic; needs conf generator + kernel-update hook)
 
 ## Done
 
