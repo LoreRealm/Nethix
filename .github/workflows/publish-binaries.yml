@@ -1,12 +1,12 @@
-# Publish installer binaries to LoreRealm/nethix-artifacts on green builds.
-# Needs a repo secret ARTIFACTS_TOKEN: a PAT with Contents:write on nethix-artifacts.
 name: publish-binaries
-
+# Builds the installer workspace and publishes binaries as a release asset
+# in the nethix-artifacts repo. Triggered after a green build-installer run.
 on:
   workflow_run:
-    workflows: ["build-installer"]
+    workflows: [build-installer]
     types: [completed]
-  workflow_dispatch:
+    branches: [main]
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -18,24 +18,24 @@ jobs:
       github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
 
-      - name: Build workspace
-        run: |
-          cd installer
-          cargo build --release
+      - name: build workspace
+        run: cargo build --release
+        working-directory: installer
 
-      - name: Collect binaries
+      - name: package binaries
         run: |
           mkdir -p dist
           cp installer/target/release/{summon,summon-exec,forge,scri} dist/
           cd dist && zip ../nethix-installer-binaries.zip summon summon-exec forge scri
 
-      - name: Publish to artifacts repo
-        env:
-          GH_TOKEN: ${{ secrets.ARTIFACTS_TOKEN }}
+      - name: publish to artifacts repo
         run: |
           gh release delete latest --repo LoreRealm/nethix-artifacts --yes 2>/dev/null || true
           gh release create latest --repo LoreRealm/nethix-artifacts \
-            --title "Latest installer binaries" --notes "Auto-published from main@$GITHUB_SHA" \
+            --title "Latest installer binaries" \
+            --notes "Auto-published from main@${GITHUB_SHA}" \
             nethix-installer-binaries.zip
+        env:
+          GH_TOKEN: ${{ secrets.ARTIFACTS_PAT }}
