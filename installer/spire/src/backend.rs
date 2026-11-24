@@ -1,5 +1,7 @@
 //! Spire's pluggable package-source backends.
-//! Each backend provides async search + install over a common Listing type.
+//! Methods are synchronous by design: they run on Task::perform worker
+//! threads (never the UI thread), so blocking IO is fine and the trait
+//! stays dyn-compatible.
 
 use anyhow::Result;
 
@@ -23,8 +25,8 @@ pub enum Kind {
 
 pub trait Backend: Send + Sync {
     fn name(&self) -> &'static str;
-    fn search(&self, q: &str) -> impl std::future::Future<Output = Result<Vec<Listing>>> + Send;
-    fn install(&self, id: &str) -> impl std::future::Future<Output = Result<()>> + Send;
+    fn search(&self, q: &str) -> Result<Vec<Listing>>;
+    fn install(&self, id: &str) -> Result<()>;
 }
 
 pub fn store_backend(kind: Kind) -> &'static dyn Backend {
@@ -41,8 +43,8 @@ impl Backend for ScriBackend {
         "AUR (via scri)"
     }
 
-    async fn search(&self, q: &str) -> Result<Vec<Listing>> {
-        let results = scri::aur::search(q)?;
+    fn search(&self, q: &str) -> Result<Vec<Listing>> {
+        let results = scri_lib::aur::search(q)?;
         Ok(results
             .into_iter()
             .map(|r| Listing {
@@ -55,21 +57,21 @@ impl Backend for ScriBackend {
             .collect())
     }
 
-    async fn install(&self, id: &str) -> Result<()> {
-        let pb = scri::aur::pkgbuild(id)?;
-        let report = scri::risk::assess(&pb);
+    fn install(&self, id: &str) -> Result<()> {
+        let pb = scri_lib::aur::pkgbuild(id)?;
+        let report = scri_lib::risk::assess(&pb);
         if report
             .findings
             .iter()
-            .any(|f| f.severity == scri::risk::Severity::High)
+            .any(|f| f.severity == scri_lib::risk::Severity::High)
         {
             anyhow::bail!(
                 "HIGH-severity risk findings — run `scri review {}` and confirm",
                 id
             );
         }
-        let eb = scri::convert::to_ebuild(&pb)?;
-        scri::convert::install_via_portage(&pb, &eb, true)
+        let eb = scri_lib::convert::to_ebuild(&pb)?;
+        scri_lib::convert::install_via_portage(&pb, &eb, true)
     }
 }
 
@@ -80,8 +82,8 @@ impl Backend for FlatpakBackend {
         "Flatpak"
     }
 
-    async fn search(&self, q: &str) -> Result<Vec<Listing>> {
-        let out = tokio_shim(&format!(
+    fn search(&self, q: &str) -> Result<Vec<Listing>> {
+        let out = run_cmd(&format!(
             "flatpak --columns=application,description search {}",
             shell_escape(q)
         ))?;
@@ -102,15 +104,13 @@ impl Backend for FlatpakBackend {
         Ok(listings)
     }
 
-    async fn install(&self, id: &str) -> Result<()> {
-        let st = tokio_shim(&format!("flatpak install -y flathub {}", shell_escape(id)))?;
-        let _ = st;
+    fn install(&self, id: &str) -> Result<()> {
+        run_cmd(&format!("flatpak install -y flathub {}", shell_escape(id)))?;
         Ok(())
     }
 }
 
-fn tokio_shim(cmd: &str) -> Result<String> {
-    // Blocking is fine for v1: one op at a time, UI stays responsive.
+fn run_cmd(cmd: &str) -> Result<String> {
     let out = std::process::Command::new("sh")
         .arg("-c")
         .arg(cmd)

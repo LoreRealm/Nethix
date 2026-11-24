@@ -4,8 +4,8 @@
 
 mod backend;
 
-use backend::{store_backend, Backend, Listing};
-use iced::widget::{button, column, scrollable, text, text_input};
+use backend::{store_backend, Kind, Listing};
+use iced::widget::{button, column, row, scrollable, text, text_input};
 use iced::{Element, Task};
 
 #[derive(Debug, Clone)]
@@ -16,12 +16,12 @@ enum Msg {
     Failed(String),
     Install(String),
     Installed(String, bool),
-    BackendChanged(backend::Kind),
+    BackendChanged(Kind),
 }
 
 #[derive(Debug, Clone)]
 struct State {
-    backend_kind: backend::Kind,
+    backend_kind: Kind,
     query: String,
     listings: Vec<Listing>,
     status: Option<String>,
@@ -48,13 +48,14 @@ fn update(state: &mut State, msg: Msg) -> Task<Msg> {
             let q = state.query.trim().to_string();
             let kind = state.backend_kind;
             Task::perform(
-                async move {
+                std::thread::spawn(move || {
                     let b = store_backend(kind);
-                    b.search(&q).await.map_err(|e| e.to_string())
-                },
-                |res| match res {
-                    Ok(l) => Msg::Results(l),
-                    Err(e) => Msg::Failed(e),
+                    b.search(&q).map_err(|e| e.to_string())
+                }),
+                |handle| match handle.join() {
+                    Ok(Ok(l)) => Msg::Results(l),
+                    Ok(Err(e)) => Msg::Failed(e),
+                    Err(_) => Msg::Failed("search thread panicked".into()),
                 },
             )
         }
@@ -74,13 +75,16 @@ fn update(state: &mut State, msg: Msg) -> Task<Msg> {
             state.busy = true;
             let kind = state.backend_kind;
             Task::perform(
-                async move {
+                std::thread::spawn(move || {
                     let b = store_backend(kind);
-                    b.install(&id).await.map_err(|e| e.to_string()).map(|_| id.clone())
-                },
-                |res| match res {
-                    Ok(id) => Msg::Installed(id, true),
-                    Err(e) => Msg::Installed(e, false),
+                    b.install(&id)
+                        .map(|_| id.clone())
+                        .map_err(|e| e.to_string())
+                }),
+                |handle| match handle.join() {
+                    Ok(Ok(id)) => Msg::Installed(id, true),
+                    Ok(Err(e)) => Msg::Installed(e, false),
+                    Err(_) => Msg::Installed("install thread panicked".into(), false),
                 },
             )
         }
@@ -98,41 +102,39 @@ fn update(state: &mut State, msg: Msg) -> Task<Msg> {
 
 fn view(state: &State) -> Element<'_, Msg> {
     let title = text("Spire — the App Store for Nethix").size(24);
-    let tabs = iced::widget::row(
-        [backend::Kind::Aur, backend::Kind::Flatpak]
-            .iter()
-            .map(|k| {
-                let b = store_backend(*k);
-                button(text(format!("{}", b.name())))
-                    .on_press_maybe(Some(Msg::BackendChanged(*k)))
-            })
-            .collect(),
-    )
-    .spacing(8);
 
-    let search_row = iced::widget::row![
+    let tab_buttons: Vec<Element<Msg>> = [Kind::Aur, Kind::Flatpak]
+        .iter()
+        .map(|k| {
+            let b = store_backend(*k);
+            button(text(b.name())).on_press(Msg::BackendChanged(*k)).into()
+        })
+        .collect();
+    let tabs = row(tab_buttons).spacing(8);
+
+    let search_row = row![
         text_input("search packages...", &state.query).on_input(Msg::QueryChanged),
         button("Search").on_press(Msg::Search),
     ]
     .spacing(8);
 
-    let mut list_col = column().spacing(4);
+    let mut list_col = column(Vec::<Element<'_, Msg>>::new()).spacing(4);
     for l in &state.listings {
-        list_col = list_col.push(
-            iced::widget::column![
-                text(format!("{} — {}", l.name, l.summary)).size(14),
-                iced::widget::row![
-                    text(format!("popularity: {}", l.popularity)).size(11),
-                    match &l.risk_note {
-                        Some(note) => text(format!("risk: {note}")).size(11),
-                        None => text("").size(11),
-                    },
-                    button("Install").on_press(Msg::Install(l.id.clone())),
-                ]
-                .spacing(12),
+        let entry: Element<Msg> = iced::widget::column![
+            text(format!("{} — {}", l.name, l.summary)).size(14),
+            row![
+                text(format!("popularity: {}", l.popularity)).size(11),
+                match &l.risk_note {
+                    Some(note) => text(format!("risk: {note}")).size(11),
+                    None => text("").size(11),
+                },
+                button("Install").on_press(Msg::Install(l.id.clone())),
             ]
-            .padding(4),
-        );
+            .spacing(12),
+        ]
+        .padding(4)
+        .into();
+        list_col = list_col.push(entry);
     }
 
     let body = column![
@@ -154,7 +156,7 @@ fn view(state: &State) -> Element<'_, Msg> {
 fn main() -> iced::Result {
     iced::application(
         || State {
-            backend_kind: backend::Kind::Aur,
+            backend_kind: Kind::Aur,
             query: String::new(),
             listings: Vec::new(),
             status: None,
