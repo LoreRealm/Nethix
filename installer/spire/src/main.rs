@@ -28,6 +28,42 @@ struct State {
     busy: bool,
 }
 
+fn spawn_search(kind: Kind, q: String) -> Task<Msg> {
+    Task::perform(
+        async move {
+            let handle = std::thread::spawn(move || {
+                let b = store_backend(kind);
+                b.search(&q).map_err(|e| e.to_string())
+            });
+            match handle.join() {
+                Ok(Ok(l)) => Msg::Results(l),
+                Ok(Err(e)) => Msg::Failed(e),
+                Err(_) => Msg::Failed("search thread panicked".into()),
+            }
+        },
+        |msg| msg,
+    )
+}
+
+fn spawn_install(kind: Kind, id: String) -> Task<Msg> {
+    Task::perform(
+        async move {
+            let handle = std::thread::spawn(move || {
+                let b = store_backend(kind);
+                b.install(&id)
+                    .map(|_| id.clone())
+                    .map_err(|e| e.to_string())
+            });
+            match handle.join() {
+                Ok(Ok(id)) => Msg::Installed(id, true),
+                Ok(Err(e)) => Msg::Installed(e, false),
+                Err(_) => Msg::Installed("install thread panicked".into(), false),
+            }
+        },
+        |msg| msg,
+    )
+}
+
 fn update(state: &mut State, msg: Msg) -> Task<Msg> {
     match msg {
         Msg::QueryChanged(q) => {
@@ -45,19 +81,7 @@ fn update(state: &mut State, msg: Msg) -> Task<Msg> {
                 return Task::none();
             }
             state.busy = true;
-            let q = state.query.trim().to_string();
-            let kind = state.backend_kind;
-            Task::perform(
-                std::thread::spawn(move || {
-                    let b = store_backend(kind);
-                    b.search(&q).map_err(|e| e.to_string())
-                }),
-                |handle| match handle.join() {
-                    Ok(Ok(l)) => Msg::Results(l),
-                    Ok(Err(e)) => Msg::Failed(e),
-                    Err(_) => Msg::Failed("search thread panicked".into()),
-                },
-            )
+            spawn_search(state.backend_kind, state.query.trim().to_string())
         }
         Msg::Results(mut l) => {
             l.sort_by(|a, b| b.popularity.cmp(&a.popularity));
@@ -73,20 +97,7 @@ fn update(state: &mut State, msg: Msg) -> Task<Msg> {
         }
         Msg::Install(id) => {
             state.busy = true;
-            let kind = state.backend_kind;
-            Task::perform(
-                std::thread::spawn(move || {
-                    let b = store_backend(kind);
-                    b.install(&id)
-                        .map(|_| id.clone())
-                        .map_err(|e| e.to_string())
-                }),
-                |handle| match handle.join() {
-                    Ok(Ok(id)) => Msg::Installed(id, true),
-                    Ok(Err(e)) => Msg::Installed(e, false),
-                    Err(_) => Msg::Installed("install thread panicked".into(), false),
-                },
-            )
+            spawn_install(state.backend_kind, id)
         }
         Msg::Installed(msg, ok) => {
             state.busy = false;
@@ -133,7 +144,7 @@ fn view(state: &State) -> Element<'_, Msg> {
             .spacing(12),
         ]
         .padding(4)
-        .into();
+               .into();
         list_col = list_col.push(entry);
     }
 
