@@ -11,7 +11,9 @@ jobs:
         working-directory: installer
       - uses: actions/upload-artifact@v4
         with:
-          name: cantrip-binaries
+          name: nethix-binaries
           path: |
-            installer/target/release/cantrip-install
-            installer/target/release/cantrip-hwdetect
+            installer/target/release/summon
+            installer/target/release/summon-exec
+            installer/target/release/forge
+            installer/target/release/scri
