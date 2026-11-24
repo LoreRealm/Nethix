@@ -77,8 +77,7 @@ impl Executor {
         let (tarball, need_cleanup) = if local.exists() {
             (local.to_path_buf(), false)
         } else {
-            // scrape the latest stage3 filename from the mirror index
-            let index = std::process::Command::new("curl")
+            let index = Command::new("curl")
                 .args(["-fsSL", &format!("{STAGE3_BASE}latest-stage3-amd64-systemd.txt")])
                 .output()
                 .context("fetching stage3 index")?;
@@ -94,7 +93,6 @@ impl Executor {
             let url = format!("{STAGE3_BASE}{name}");
             let dest = std::path::PathBuf::from("/tmp/nethix-stage3.tar.xz");
             sh("curl", &["-fLo", dest.to_str().unwrap(), &url])?;
-            // verify sha512 from the .DIGESTS sidecar
             sh("curl", &["-fLo", "/tmp/stage3.DIGESTS", &format!("{url}.DIGESTS")])?;
             let digests = std::fs::read_to_string("/tmp/stage3.DIGESTS").unwrap_or_default();
             let expect = digests
@@ -103,7 +101,7 @@ impl Executor {
                 .and_then(|l| l.split_whitespace().nth(1))
                 .context("no SHA512 in DIGESTS")?
                 .to_string();
-            let sum_out = std::process::Command::new("sha512sum")
+            let sum_out = Command::new("sha512sum")
                 .arg(&dest)
                 .output()
                 .context("sha512sum")?;
@@ -114,8 +112,7 @@ impl Executor {
             (dest, true)
         };
 
-        // untar preserving xattrs (needed for caps in stage3)
-        sh("tar", &["xpf", tarball.to_str().unwrap(), "-C", mnt, "--xattrs-include='*'", "--numeric-owner"])?;
+        sh("tar", &["xpf", tarball.to_str().unwrap(), "-C", mnt, "--xattrs-include=*", "--numeric-owner"])?;
         if need_cleanup {
             let _ = std::fs::remove_file("/tmp/stage3.DIGESTS");
         }
@@ -140,28 +137,25 @@ impl Executor {
     }
 
     /// Create the user account. Password arrives via the root-only
-    /// credential file staged by the GUI's pkexec helper (newline-terminated
-    /// plaintext over a 0600 pipe; hashed by chpasswd inside the chroot).
+    /// credential file staged by the GUI's pkexec helper; hashed by
+    /// chpasswd inside the chroot.
     fn provision_user(&self, mnt: &str) -> Result<()> {
         let cred = std::fs::read_to_string("/var/lib/nethix/user.password")
             .context("reading staged credential (GUI must stage this via pkexec)")?;
-        sh("cp", &["/etc/portage/make.conf", &format!("{mnt}/etc/portage/make.conf")]).ok();
-        // hostname
         std::fs::write(format!("{mnt}/etc/hostname"), &self.plan.hostname)?;
-        // user + groups
         Self::chroot_cmd(mnt, "useradd", &[
             "-m", "-G", "wheel,audio,video,plugdev,portage",
             "-s", "/bin/bash", &self.plan.username,
         ])?;
         // set password via stdin pipe to chpasswd
-        let st = Command::new("chroot")
+        let mut st = Command::new("chroot")
             .args([mnt, "chpasswd"])
             .stdin(std::process::Stdio::piped())
             .spawn()
             .context("spawning chroot chpasswd")?;
-        if let Some(mut si) = st.stdin {
+        if let Some(mut si) = st.stdin.take() {
             use std::io::Write;
-            let _ = si.write_all(format!("{}:{}", self.plan.username, cred.trim()).as_bytes());
+            si.write_all(format!("{}:{}", self.plan.username, cred.trim()).as_bytes())?;
         }
         let _ = st.wait_with_output()?;
         // shred the staged credential
