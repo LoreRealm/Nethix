@@ -1,5 +1,6 @@
-//! Install plan: the serializable contract between the GUI front-end
-//! and the privileged back-end that actually mutates disks and runs emerge.
+//! Install plan: serializable contract between GUI front-end and
+//! privileged back-end. Password is hashed at plan-construction time
+//! and NEVER serialized — the exec side receives the hash separately.
 
 use serde::{Deserialize, Serialize};
 
@@ -17,7 +18,6 @@ pub enum BootMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstallPlan {
-    /// e.g. "/dev/nvme0n1" — whole-disk install for now
     pub target_disk: String,
     pub filesystem: FsKind,
     pub boot_mode: BootMode,
@@ -25,8 +25,14 @@ pub struct InstallPlan {
     pub microarch_profile: String,
     pub hostname: String,
     pub username: String,
-    pub plaintext_password: Option<String>,
     pub install_plasma: bool,
+}
+
+/// Password transport: argon2 hash, delivered out-of-band from the TOML plan
+/// (written to a root-only file by the GUI process via pkexec/sudo helper).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialBundle {
+    pub argon2_hash: String,
 }
 
 impl Default for InstallPlan {
@@ -38,7 +44,6 @@ impl Default for InstallPlan {
             microarch_profile: "x86-64-v3".into(),
             hostname: "nethix".into(),
             username: "user".into(),
-            plaintext_password: None,
             install_plasma: true,
         }
     }
@@ -59,12 +64,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn plan_roundtrip() {
-        let p = InstallPlan {
-            hostname: "victory".into(),
-            ..Default::default()
-        };
+    fn plan_roundtrip_no_password_leak() {
+        let p = InstallPlan { hostname: "victory".into(), ..Default::default() };
         let s = p.to_toml().unwrap();
+        assert!(!s.contains("password"));
+        assert!(!s.contains("plaintext"));
         let q = InstallPlan::from_toml(&s).unwrap();
         assert_eq!(p, q);
     }

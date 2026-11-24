@@ -14,7 +14,6 @@ enum Msg {
     FsSelected(FsKind),
     HostnameChanged(String),
     UserChanged(String),
-    PasswordChanged(String),
     StartInstall,
 }
 
@@ -30,19 +29,27 @@ enum Step {
 struct App {
     step: Step,
     plan: InstallPlan,
+    fs_options: Vec<FsKind>,
 }
 
 impl App {
     fn new() -> Self {
-        App { step: Step::Welcome, plan: InstallPlan::default() }
+        App {
+            step: Step::Welcome,
+            plan: InstallPlan::default(),
+            fs_options: vec![FsKind::BtrfsZstd, FsKind::Ext4],
+        }
     }
 
     fn write_plan(&self) -> Task<Msg> {
         let toml = self.plan.to_toml().unwrap_or_default();
-        Task::perform(async move {
-            std::fs::create_dir_all("/var/lib/nethix").ok();
-            std::fs::write("/var/lib/nethix/cantrip-install-plan.toml", toml).ok();
-        }, |_| Msg::Next)
+        Task::perform(
+            async move {
+                std::fs::create_dir_all("/var/lib/nethix").ok();
+                std::fs::write("/var/lib/nethix/cantrip-install-plan.toml", toml).ok();
+            },
+            |_| Msg::Next,
+        )
     }
 }
 
@@ -56,7 +63,7 @@ impl iced::Program for App {
                     Step::Welcome => Step::Target,
                     Step::Target => Step::Account,
                     Step::Account => Step::Ready,
-                    _ => self.step.clone(),
+                    s => s,
                 };
             }
             Msg::Back => {
@@ -64,14 +71,13 @@ impl iced::Program for App {
                     Step::Target => Step::Welcome,
                     Step::Account => Step::Target,
                     Step::Ready => Step::Account,
-                    _ => self.step.clone(),
+                    s => s,
                 };
             }
             Msg::DiskChanged(d) => self.plan.target_disk = d,
             Msg::FsSelected(f) => self.plan.filesystem = f,
             Msg::HostnameChanged(h) => self.plan.hostname = h,
             Msg::UserChanged(u) => self.plan.username = u,
-            Msg::PasswordChanged(p) => self.plan.plaintext_password = Some(p),
             Msg::StartInstall => {
                 self.step = Step::Running;
                 return self.write_plan();
@@ -82,29 +88,38 @@ impl iced::Program for App {
 
     fn view(&self) -> Element<'_, Msg> {
         let title = text(format!("Nethix installer — {:?}", self.step)).size(24);
+        let fs_pick = pick_list(
+            self.fs_options.clone(),
+            Some(self.plan.filesystem.clone()),
+            Msg::FsSelected,
+        );
         let body: Element<Msg> = match self.step {
             Step::Welcome => text("Welcome to Nethix (KDE Plasma 6)").into(),
             Step::Target => column![
-                text_input("target disk (e.g. /dev/nvme0n1)", &self.plan.target_disk, Msg::DiskChanged),
-                pick_list(vec![FsKind::BtrfsZstd, FsKind::Ext4], Some(self.plan.filesystem.clone()), Msg::FsSelected),
+                text_input("target disk (e.g. /dev/nvme0n1)", &self.plan.target_disk).on_input(Msg::DiskChanged),
+                fs_pick,
             ].spacing(10).into(),
             Step::Account => column![
-                text_input("hostname", &self.plan.hostname, Msg::HostnameChanged),
-                text_input("username", &self.plan.username, Msg::UserChanged),
-                text_input("password", self.plan.plaintext_password.as_deref().unwrap_or(""), Msg::PasswordChanged),
+                text_input("hostname", &self.plan.hostname).on_input(Msg::HostnameChanged),
+                text_input("username", &self.plan.username).on_input(Msg::UserChanged),
             ].spacing(10).into(),
             Step::Ready => column![
-                text(format!("About to install onto {} ({}). This will erase the disk!", self.plan.target_disk, match self.plan.filesystem { FsKind::BtrfsZstd => "btrfs+zstd", FsKind::Ext4 => "ext4" })),
+                text(format!(
+                    "About to install onto {} ({}). This will erase the disk!",
+                    self.plan.target_disk,
+                    match self.plan.filesystem {
+                        FsKind::BtrfsZstd => "btrfs+zstd",
+                        FsKind::Ext4 => "ext4",
+                    }
+                )),
                 button("Install").on_press(Msg::StartInstall),
             ].spacing(10).into(),
             Step::Running => text("Installing... (TODO: stream exec output)").into(),
         };
-        column![
-            title,
-            body,
-            button("Back").on_press(Msg::Back),
-            button("Next").on_press(Msg::Next),
-        ].padding(20).spacing(10).into()
+        column![title, body, button("Back").on_press(Msg::Back), button("Next").on_press(Msg::Next)]
+            .padding(20)
+            .spacing(10)
+            .into()
     }
 }
 
