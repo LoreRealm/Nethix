@@ -1,10 +1,10 @@
-pub mod exec;
-pub mod plan;
+//! GUI front-end. All install logic lives in the lib crate.
+//! Modules are consumed via `nethix_installer_lib::`, not redeclared here.
 
 use iced::widget::{button, column, pick_list, text, text_input};
 use iced::{Element, Task};
 
-use plan::{FsKind, InstallPlan};
+use nethix_installer_lib::plan::{FsKind, InstallPlan};
 
 #[derive(Debug, Clone)]
 enum Msg {
