@@ -15,19 +15,13 @@
 
 Performance-tuned kernel · prebuilt Plasma binhost · graphical installer · automatic hardware detection
 
-[![build](https://img.shields.io/badge/CI-build--installer-informational)](https://github.com/LoreRealm/nethix/actions)
-[![status](https://imgields.io/badge/status-pre--alpha-orange)](TODO.md)
-[![init](https://img.shields.io/badge/init-systemd-blue)](TODO.md)
-[![bootloader](https://img.shields.io/badge/bootloader-limine%20%7C%20sd--boot-blueviolet)](TODO.md)
-[![base](https://img.shields.io/badge/base-Gentoo-5c5cff)](https://www.gentoo.org)
-
 </div>
 
 ---
 
 ## Overview
 
-Nethix is **not** a package fork. Everything resolves against `::gentoo` + GURU. Nethix adds the ergonomics layer Gentoo lacks out of the box: a tuned kernel, prebuilt binaries for common desktops, a real graphical installer, and tools that respect the source-based heritage.
+Nethix is **not** a package fork. Everything resolves against `::gentoo` + GURU. Nethix adds the ergonomics layer Gentoo lacks out of the box: a tuned kernel, prebuilt binaries for common desktops, a real graphical installer, and hardware that configures itself.
 
 ## Components
 
@@ -66,7 +60,7 @@ cargo build --release
 cargo test
 ```
 
-CI: `build-installer` (push), `ci-watchdog` (hourly, files an issue on failure), `build-binhost` (nightly), Dependabot (cargo + actions, weekly).
+Workflow shrines: `build-installer` (on push), `ci-watchdog` (hourly, files an issue on failure), `build-binhost` (nightly). Dependabot watches cargo + actions weekly.
 
 ## System Layout (installed)
 
@@ -76,7 +70,7 @@ summon-exec           # privileged install executor
 forge                 # hardware detection → /etc/portage/make.conf
 scri search|review|install <pkg>
 cantrip-update        # interactive world update
-score // TODO cantrip-kernel          # rebuild + reinstall nethix-sources
+cantrip-kernel        # rebuild + reinstall nethix-sources
 cantrip-stage         # stage profiles/overlay pre-install
 ```
 
