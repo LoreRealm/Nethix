@@ -1,0 +1,5 @@
+Live CD notes (WIP):
+- Base: catalyst or manual stage3 squashfs with plasma-meta + cantrip-install + cantrip-hwdetect
+- Autostart cantrip-install on Plasma session launch
+- Ship btrfs-progs, efibootmgr, pipewire preinstalled
+- TODO: catalyst spec file to follow

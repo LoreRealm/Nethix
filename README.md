@@ -1,7 +1,10 @@
-distro: Nethix
-commands: cantrip-*
-kernel: sys-kernel/nethix-sources (BORE/Cachy patchset)
-profiles: amd64-v3 / amd64-v4 tuned
-binhost: curated Plasma desktop set, built in CI
-installer: cantrip-install (iced GUI)
-hwdetect: cantrip-hwdetect (pci.ids -> drivers, like chwd)
+# Nethix
+
+Private WIP. Gentoo packages, CachyOS-style ergonomics:
+- BORE/Cachy flavored kernel ebuild (sys-kernel/nethix-sources)
+- x86-64-v3 / v4 tuned profiles + curated binhost
+- `cantrip-install` — Rust GUI installer (Plasma 6 default)
+- `cantrip-hwdetect` — chwd-style automatic hardware detection
+- `cantrip-*` command suite (named for level-0 spells: tiny, reusable, no mana cost)
+
+NOT a package fork. Everything resolves against ::gentoo + GURU.
