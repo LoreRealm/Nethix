@@ -6,8 +6,12 @@
 //! consumes it. This file is the exec-side library.
 
 use crate::plan::{BootMode, FsKind, InstallPlan};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::process::Command;
+
+/// Mirror directory listing for current stage3 tarballs.
+const STAGE3_BASE: &str =
+    "https://distfiles.gentoo.org/releases/amd64/autobuilds/current-stage3-amd64-systemd/";
 
 pub struct Executor {
     pub plan: InstallPlan,
@@ -19,7 +23,7 @@ fn sh(cmd: &str, args: &[&str]) -> Result<()> {
         .status()
         .with_context(|| format!("running {cmd} {args:?}"))?;
     if !st.success() {
-        anyhow::bail!("{cmd} {args:?} exited with {st}");
+        bail!("{cmd} {args:?} exited with {st}");
     }
     Ok(())
 }
@@ -65,11 +69,57 @@ impl Executor {
         Ok(())
     }
 
-    /// Fetch and unpack the current amd64 stage3 into mnt.
+    /// Download the current systemd stage3, verify its sha512, untar into mnt.
+    /// If /var/lib/nethix/stage3.tar.xz already exists (shipped on the ISO),
+    /// use that instead of downloading.
     pub fn unpack_stage3(&self, mnt: &str) -> Result<()> {
-        // NOTE: live ISO ships a local stage3 copy; CI can refresh the pin.
-        // TODO: curl -fL stage3 tarball, verify sha512, untar into mnt
-        anyhow::bail!("unpack_stage3: TODO — download + checksum + tar -xpf");
+        let local = std::path::Path::new("/var/lib/nethix/stage3.tar.xz");
+        let (tarball, need_cleanup) = if local.exists() {
+            (local.to_path_buf(), false)
+        } else {
+            // scrape the latest stage3 filename from the mirror index
+            let index = std::process::Command::new("curl")
+                .args(["-fsSL", &format!("{STAGE3_BASE}latest-stage3-amd64-systemd.txt")])
+                .output()
+                .context("fetching stage3 index")?;
+            if !index.status.success() {
+                bail!("failed to fetch stage3 index");
+            }
+            let idx = String::from_utf8_lossy(&index.stdout);
+            let name = idx
+                .lines()
+                .find(|l| l.ends_with(".tar.xz"))
+                .and_then(|l| l.split_whitespace().last())
+                .context("no tarball found in stage3 index")?;
+            let url = format!("{STAGE3_BASE}{name}");
+            let dest = std::path::PathBuf::from("/tmp/nethix-stage3.tar.xz");
+            sh("curl", &["-fLo", dest.to_str().unwrap(), &url])?;
+            // verify sha512 from the .DIGESTS sidecar
+            sh("curl", &["-fLo", "/tmp/stage3.DIGESTS", &format!("{url}.DIGESTS")])?;
+            let digests = std::fs::read_to_string("/tmp/stage3.DIGESTS").unwrap_or_default();
+            let expect = digests
+                .lines()
+                .find(|l| l.starts_with("SHA512") && l.contains(name))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .context("no SHA512 in DIGESTS")?
+                .to_string();
+            let sum_out = std::process::Command::new("sha512sum")
+                .arg(&dest)
+                .output()
+                .context("sha512sum")?;
+            let actual = String::from_utf8_lossy(&sum_out.stdout).split_whitespace().next().unwrap_or("").to_string();
+            if !expect.eq_ignore_ascii_case(&actual) {
+                bail!("stage3 checksum mismatch: expected {expect}, got {actual}");
+            }
+            (dest, true)
+        };
+
+        // untar preserving xattrs (needed for caps in stage3)
+        sh("tar", &["xpf", tarball.to_str().unwrap(), "-C", mnt, "--xattrs-include='*'", "--numeric-owner"])?;
+        if need_cleanup {
+            let _ = std::fs::remove_file("/tmp/stage3.DIGESTS");
+        }
+        Ok(())
     }
 
     /// Bind mounts + resolv.conf so the chroot can use the network.
@@ -89,17 +139,51 @@ impl Executor {
         sh("chroot", &v)
     }
 
-    /// Run a sequence of chrooted commands: sync tree, install base set,
-    /// kernel, bootloader.
+    /// Create the user account. Password arrives via the root-only
+    /// credential file staged by the GUI's pkexec helper (newline-terminated
+    /// plaintext over a 0600 pipe; hashed by chpasswd inside the chroot).
+    fn provision_user(&self, mnt: &str) -> Result<()> {
+        let cred = std::fs::read_to_string("/var/lib/nethix/user.password")
+            .context("reading staged credential (GUI must stage this via pkexec)")?;
+        sh("cp", &["/etc/portage/make.conf", &format!("{mnt}/etc/portage/make.conf")]).ok();
+        // hostname
+        std::fs::write(format!("{mnt}/etc/hostname"), &self.plan.hostname)?;
+        // user + groups
+        Self::chroot_cmd(mnt, "useradd", &[
+            "-m", "-G", "wheel,audio,video,plugdev,portage",
+            "-s", "/bin/bash", &self.plan.username,
+        ])?;
+        // set password via stdin pipe to chpasswd
+        let st = Command::new("chroot")
+            .args([mnt, "chpasswd"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .context("spawning chroot chpasswd")?;
+        if let Some(mut si) = st.stdin {
+            use std::io::Write;
+            let _ = si.write_all(format!("{}:{}", self.plan.username, cred.trim()).as_bytes());
+        }
+        let _ = st.wait_with_output()?;
+        // shred the staged credential
+        let _ = std::fs::remove_file("/var/lib/nethix/user.password");
+        Ok(())
+    }
+
+    /// Full install sequence: sync, install sets, kernel, bootloader, user.
     pub fn populate(&self, mnt: &str) -> Result<()> {
         Self::chroot_cmd(mnt, "emerge-webrsync", &[])?;
-        // tuned make.conf staged by GUI/isow into /var/lib/nethix before exec runs
-        let mc = format!("/var/lib/nethix/makeconf.{}", self.plan.microarch_profile.replace("x86-64-", "amd64-"));
+        let mc = format!(
+            "/var/lib/nethix/makeconf.{}",
+            self.plan.microarch_profile.replace("x86-64-", "amd64-")
+        );
         sh("cp", &[&mc, &format!("{mnt}/etc/portage/make.conf")])?;
         sh("cp", &["-r", "/var/lib/nethix/overlay", &format!("{mnt}/var/db/repos/nethix")])?;
         Self::chroot_cmd(mnt, "emerge", &["--oneshot", "sys-apps/portage"])?;
         if self.plan.install_plasma {
-            Self::chroot_cmd(mnt, "emerge", &["--getbinpkg", "kde-plasma/plasma-meta", "media-sound/pipewire", "net-misc/networkmanager"])?;
+            Self::chroot_cmd(mnt, "emerge", &[
+                "--getbinpkg", "kde-plasma/plasma-meta",
+                "media-sound/pipewire", "net-misc/networkmanager",
+            ])?;
         }
         Self::chroot_cmd(mnt, "emerge", &["sys-kernel/nethix-sources"])?;
         match self.plan.boot_mode {
@@ -113,6 +197,7 @@ impl Executor {
             }
         }
         Self::chroot_cmd(mnt, "grub-mkconfig", &["-o", "/boot/grub/grub.cfg"])?;
+        self.provision_user(mnt)?;
         Ok(())
     }
 
