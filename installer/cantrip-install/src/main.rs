@@ -17,7 +17,7 @@ enum Msg {
     StartInstall,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum Step {
     Welcome,
     Target,
@@ -29,19 +29,13 @@ enum Step {
 struct App {
     step: Step,
     plan: InstallPlan,
-    fs_options: Vec<FsKind>,
 }
 
 impl App {
     fn new() -> Self {
-        App {
-            step: Step::Welcome,
-            plan: InstallPlan::default(),
-            fs_options: vec![FsKind::BtrfsZstd, FsKind::Ext4],
-        }
+        App { step: Step::Welcome, plan: InstallPlan::default() }
     }
 
-    // iced 0.13: update/view are plain methods consumed by iced::application(...)
     fn update(&mut self, msg: Msg) -> Task<Msg> {
         match msg {
             Msg::Next => {
@@ -75,11 +69,11 @@ impl App {
     fn view(&self) -> Element<'_, Msg> {
         let title = text(format!("Nethix installer — {:?}", self.step)).size(24);
         let fs_pick = pick_list(
-            self.fs_options.clone(),
-            Some(self.plan.filesystem.clone()),
+            vec![FsKind::BtrfsZstd, FsKind::Ext4],
+            Some(self.plan.filesystem),
             Msg::FsSelected,
         );
-        let body: Element<Msg> = match self.step {
+        let body: Element<Msg> = match &self.step {
             Step::Welcome => text("Welcome to Nethix (KDE Plasma 6)").into(),
             Step::Target => column![
                 text_input("target disk (e.g. /dev/nvme0n1)", &self.plan.target_disk)
@@ -97,11 +91,7 @@ impl App {
             Step::Ready => column![
                 text(format!(
                     "About to install onto {} ({}). This will erase the disk!",
-                    self.plan.target_disk,
-                    match self.plan.filesystem {
-                        FsKind::BtrfsZstd => "btrfs+zstd",
-                        FsKind::Ext4 => "ext4",
-                    }
+                    self.plan.target_disk, self.plan.filesystem
                 )),
                 button("Install").on_press(Msg::StartInstall),
             ]
@@ -133,6 +123,7 @@ impl App {
 }
 
 fn main() -> iced::Result {
+    // iced 0.13 run_with expects FnOnce() -> (State, Task<Message>)
     iced::application("Nethix installer", App::update, App::view)
-        .run_with(App::new)
+        .run_with(|| (App::new(), Task::none()))
 }

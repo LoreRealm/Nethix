@@ -1,22 +1,30 @@
 //! Install plan: serializable contract between GUI front-end and
-//! privileged back-end. Password is hashed at plan-construction time
-//! and NEVER serialized — the exec side receives the hash separately.
+//! privileged back-end. No credentials are serialized.
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FsKind {
     BtrfsZstd,
     Ext4,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+impl std::fmt::Display for FsKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FsKind::BtrfsZstd => write!(f, "btrfs + zstd"),
+            FsKind::Ext4 => write!(f, "ext4"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BootMode {
     Uefi,
     Bios,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InstallPlan {
     pub target_disk: String,
     pub filesystem: FsKind,
@@ -26,13 +34,6 @@ pub struct InstallPlan {
     pub hostname: String,
     pub username: String,
     pub install_plasma: bool,
-}
-
-/// Password transport: argon2 hash, delivered out-of-band from the TOML plan
-/// (written to a root-only file by the GUI process via pkexec/sudo helper).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CredentialBundle {
-    pub argon2_hash: String,
 }
 
 impl Default for InstallPlan {
@@ -64,7 +65,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn plan_roundtrip_no_password_leak() {
+    fn plan_roundtrip_no_credentials() {
         let p = InstallPlan { hostname: "victory".into(), ..Default::default() };
         let s = p.to_toml().unwrap();
         assert!(!s.contains("password"));
