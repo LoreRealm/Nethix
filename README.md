@@ -2,13 +2,13 @@
 
 ```
 ██   ██           ██    ██         ██
-███  ██▒          ██▒   ██▒         ▒▒
-████ ██▒ █████  ███████ ██████   ████   ███ ███
-██▒████▒██▒▒▒██  ▒██▒▒▒▒██▒▒▒██   ▒██▒   █████▒▒
-██▒ ███▒███████▒  ██▒   ██▒  ██▒   ██▒    ███▒▒
-██▒  ██▒██▒▒▒▒▒▒  ██▒   ██▒  ██▒   ██▒   █████
-██▒  ██▒ █████    █████ ██▒  ██▒███████ ███▒███
- ▒▒   ▒▒  ▒▒▒▒▒    ▒▒▒▒▒ ▒▒   ▒▒ ▒▒▒▒▒▒▒ ▒▒▒ ▒▒▒
+███  ██           ██    ██
+████ ██▓ █████  ███████ ██████  ███▓   ███ ██▓
+██▒████▓██▒▒▒██  ▒██▒▒▒▒██▒▒▒██▒  ▒██▓   █████▒▒
+██▒ ███▓███████▓  ██▒   ██▒  ██▒   ██▓    ███▒▒
+██▒  ██▓██▒▒▒▒▒▒  ██▒   ██▒  ██▒   ██▓   █████
+██▒  ██▓ █████    █████ ██▒  ██▒███████ ███▒███
+ ░▒   ▒▒  ▒▒▒▒▒    ▒▒▒▒▒ ▒▒   ▒▒ ▒▒▒▒▒▒▒ ▒▒▒ ▒▒▒
 ```
 
 **A Gentoo distribution with CachyOS ergonomics — forged, not forked.**
@@ -60,7 +60,7 @@ cargo build --release
 cargo test
 ```
 
-Workflow shrines: `build-installer` (on push), `ci-watchdog` (hourly, files an issue on failure), `build-binhost` (nightly). Dependabot watches cargo + actions weekly.
+CI: `build-installer` (on push), `ci-watchdog` (hourly, files an issue on failure), `build-binhost` (nightly). Dependabot watches cargo + actions weekly.
 
 ## System Layout (installed)
 
