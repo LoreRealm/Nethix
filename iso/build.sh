@@ -4,14 +4,13 @@
 # Stages:
 #   1. chroot prep (stage3 download, bind mounts, resolv.conf)
 #   2. overlay + profile injection
-#   3. emerge live set (binhost-first)
-#   4. inject installer binaries (from ./out/installer-dist)
-#   5. liveuser + Plasma autologin config
+#   3. emerge live set
+#   4. installer binaries — pulled from nethix-artifacts repo (no local dir needed)
+#   5. liveuser
 #   6. kernel + initramfs (dracut) install to boot/
-#   7. squashfs of the root, xorriso into ISO
+#   7. squashfs + xorriso into ISO
 #
-# Requirements: root, ~30 GB free. Run from anywhere — the script
-# resolves the repo root itself.
+# Requirements: root, ~30 GB free. Run from anywhere.
 set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -20,6 +19,8 @@ cd "$REPO_ROOT"
 WORK="$REPO_ROOT/.iso-build"
 STAGE3_URL=${STAGE3_URL:-https://distfiles.gentoo.org/releases/amd64/autobuilds/current-stage3-amd64-systemd/}
 OUT_ISO=${OUT_ISO:-nethix-live-alpha.iso}
+ARTIFACTS_REPO=${ARTIFACTS_REPO:-LoreRealm/nethix-artifacts}
+ARTIFACTS_ASSET=${ARTIFACTS_ASSET:-nethix-installer-binaries.zip}
 
 say() { printf '\e[1;36m::\e[0m %s\n' "$*"; }
 die() { printf '\e[1;31m!!\e[0m %s\n' "$*" >&2; exit 1; }
@@ -29,7 +30,7 @@ die() { printf '\e[1;31m!!\e[0m %s\n' "$*" >&2; exit 1; }
 mkdir -p "$WORK"/root
 
 # --- 1. stage3
-say "fetching latest stage3 manifest + tarball..."
+say "fetching latest stage3 tarball..."
 LATEST=$(curl -fsSL "$STAGE3_URL" | grep -oE 'stage3-amd64-systemd-[0-9.]+T[0-9]+Z\.tar\.xz' | sort -r | head -n1)
 [[ -n "$LATEST" ]] || die "couldn't locate a stage3 tarball on the mirror"
 curl -fL -o "$WORK/stage3.tar.xz" "$STAGE3_URL/$LATEST"
@@ -37,10 +38,7 @@ curl -fL -o "$WORK/stage3.tar.xz" "$STAGE3_URL/$LATEST"
 say "unpacking stage3..."
 tar -xpf "$WORK/stage3.tar.xz" -C "$WORK/root" --xattrs --numeric-owner
 
-# network for the chroot
 cp -L /etc/resolv.conf "$WORK/root/etc/resolv.conf"
-
-# portage dirs stage3 doesn't pre-create
 mkdir -p "$WORK/root"/var/db/repos/{nethix,gentoo} \
          "$WORK/root"/etc/portage/repos.conf \
          "$WORK/root"/var/cache/distfiles
@@ -69,25 +67,26 @@ else
     say "WARN: profiles.d/makeconf.amd64-v3 not found; using stage3 default make.conf"
 fi
 
-# --- 3. emerge the live set
-say "emerging live set..."
+# --- 3. emerge minimal live set (alpha: no Plasma yet)
+say "emerging minimal live set..."
 chroot "$WORK/root" /bin/bash -c '
     emerge-webrsync || emerge --sync || true
     emerge --ask=n --autounmask-write app-misc/fastfetch || true
 '
-# NOTE: full Plasma emerge is hours. Alpha ISO focuses on boot verification.
 
-# --- 4. installer binaries
-say "injecting summon/forge/scri binaries..."
-if [[ -d out/installer-dist ]]; then
+# --- 4. installer binaries from artifacts repo
+say "fetching installer binaries from $ARTIFACTS_REPO (latest release)..."
+if curl -fsSL -o "$WORK/artifacts.zip" \
+     "https://github.com/$ARTIFACTS_REPO/releases/latest/download/$ARTIFACTS_ASSET"; then
     mkdir -p "$WORK/root/usr/local/bin"
-    cp out/installer-dist/{summon,summon-exec,forge,scri} "$WORK/root/usr/local/bin/" 2>/dev/null \
-        || say "WARN: some binaries missing in out/installer-dist (expected: summon summon-exec forge scri)"
+    unzip -o -j "$WORK/artifacts.zip" \*summon\* \*forge\* \*scri\* \
+        -d "$WORK/root/usr/local/bin/" \
+    || say "WARN: artifacts.zip downloaded but expected binaries not found inside"
 else
-    say "WARN: out/installer-dist absent — download build-installer workflow artifacts first"
+    say "WARN: no release asset '$ARTIFACTS_ASSET' in $ARTIFACTS_REPO — ISO will lack the installer"
 fi
 
-# --- 5. liveuser + autologin
+# --- 5. liveuser
 say "creating liveuser..."
 chroot "$WORK/root" /bin/bash -c '
     useradd -m -G wheel,audio,video,plugdev liveuser
@@ -97,16 +96,17 @@ chroot "$WORK/root" /bin/bash -c '
 # --- 6. kernel + initramfs
 say "installing kernel + dracut initramfs..."
 chroot "$WORK/root" /bin/bash -c '
-    emerge --ask=n sys-kernel/nethix-sources || die_emerge
-    die_emerge() { echo "nethix-sources emerge failed"; exit 1; }
-    cd /usr/src/linux-$(ls -1 /usr/src | grep -E "^linux-[0-9]" | sort -Vr | head -n1 | sed "s/^linux-//")
+    set -e
+    emerge --ask=n sys-kernel/nethix-sources
+    KDIR=$(ls -d /usr/src/linux-* | sort -Vr | head -n1)
+    cd "$KDIR"
     make olddefconfig
     make -j$(nproc)
     make modules_install
     INSTALL_PATH=/boot make install
 '
-chroot "$WORK/root" dracut --force --regenerate-all --hostonly=no || \
-    die "dracut failed — initramfs missing"
+chroot "$WORK/root" dracut --force --regenerate-all --hostonly=no \
+    || die "dracut failed — initramfs missing"
 
 # --- 7. squashfs + ISO
 say "packing squashfs..."
@@ -122,17 +122,7 @@ cp "$KIMG" "$WORK/iso-root/vmlinuz"
 cp "$INITRD" "$WORK/iso-root/initramfs.img"
 
 say "assembling ISO..."
-# Minimal ISOLINUX-free UEFI+BIOS boot via grub-mkstandalone (works without
-# a pre-installed grub stage in the chroot).
-chroot "$WORK/root" grub-mkstandalone \
-    -O i386-efi -o "$WORK/iso-root/efi-boot.img" \
-    "boot/grub/grub.cfg=grub-live.cfg" 2>/dev/null \
-|| chroot "$WORK/root" grub-mkstandalone \
-    -O i386-pc -o "$WORK/iso-root/bios-boot.img" \
-    "boot/grub/grub.cfg=grub-live.cfg" \
-|| die "grub-mkstandalone failed (is sys-boot/grub emerged in the chroot?)"
-
-cat > grub-live.cfg <<'EOF'
+cat > "$WORK/iso-root/grub-live.cfg" <<'EOF'
 set timeout=5
 menuentry "Nethix Live" {
     linux /vmlinuz root=live:CDLABEL=NETHIX_LIVE rd.live.image rd.live.squashimg=live.squashfs
@@ -140,13 +130,25 @@ menuentry "Nethix Live" {
 }
 EOF
 
+# Standalone grub images (EFI + BIOS) carrying the live config
+chroot "$WORK/root" grub-mkstandalone \
+    -O x86_64-efi -o /tmp/nethix-efi.img \
+    "boot/grub/grub.cfg=/tmp/grub-live.cfg" \
+|| die "grub-mkstandalone EFI failed (is sys-boot/grub emerged in the chroot?)"
+chroot "$WORK/root" grub-mkstandalone \
+    -O i386-pc -o /tmp/nethix-bios.img \
+    "boot/grub/grub.cfg=/tmp/grub-live.cfg" \
+|| die "grub-mkstandalone BIOS failed"
+cp "$WORK/root/tmp/nethix-efi.img" "$WORK/iso-root/efi-boot.img"
+cp "$WORK/root/tmp/nethix-bios.img" "$WORK/iso-root/bios-boot.img"
+
 xorriso -as mkisofs -iso-level 3 -volid NETHIX_LIVE \
-    -o "$OUT_ISO" \
+    -o "$REPO_ROOT/$OUT_ISO" \
     -eltorito-boot bios-boot.img -no-emul-boot \
-    -append-partition 2 -efi-boot-part --efi-boot-image --protective-msdos-label \
+    -append-partition 2 -append-partition 2 2>/dev/null \
     efi-boot.img \
     vmlinuz initramfs.img live.squashfs 
 
-die_if_missing() { [[ -f "$OUT_ISO" ]] || die "ISO output missing"; }
+die_if_missing() { [[ -f "$REPO_ROOT/$OUT_ISO" ]] || die "ISO output missing"; }
 die_if_missing
 say "done: $REPO_ROOT/$OUT_ISO"
