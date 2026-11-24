@@ -25,115 +25,83 @@ enum Step {
     Running,
 }
 
-struct App {
+// iced 0.14: application(boot, update, view) operates on a separate State type.
+struct App;
+
+#[derive(Debug, Clone)]
+struct State {
     step: Step,
     plan: InstallPlan,
 }
 
-impl App {
-    fn new() -> Self {
-        App { step: Step::Welcome, plan: InstallPlan::default() }
-    }
-
-    fn update(&mut self, msg: Msg) -> Task<Msg> {
-        match msg {
-            Msg::Next => {
-                self.step = match self.step {
-                    Step::Welcome => Step::Target,
-                    Step::Target => Step::Account,
-                    Step::Account => Step::Ready,
-                    s => s,
-                };
-            }
-            Msg::Back => {
-                self.step = match self.step {
-                    Step::Target => Step::Welcome,
-                    Step::Account => Step::Target,
-                    Step::Ready => Step::Account,
-                    s => s,
-                };
-            }
-            Msg::DiskChanged(d) => self.plan.target_disk = d,
-            Msg::FsSelected(f) => self.plan.filesystem = f,
-            Msg::HostnameChanged(h) => self.plan.hostname = h,
-            Msg::UserChanged(u) => self.plan.username = u,
-            Msg::StartInstall => {
-                self.step = Step::Running;
-                return self.write_plan();
-            }
+fn update(state: &mut State, msg: Msg) -> Task<Msg> {
+    match msg {
+        Msg::Next => {
+            state.step = match state.step {
+                Step::Welcome => Step::Target,
+                Step::Target => Step::Account,
+                Step::Account => Step::Ready,
+                s => s,
+            };
         }
-        Task::none()
+        Msg::Back => {
+            state.step = match state.step {
+                Step::Target => Step::Welcome,
+                Step::Account => Step::Target,
+                Step::Ready => Step::Account,
+                s => s,
+            };
+        }
+        Msg::DiskChanged(d) => state.plan.target_disk = d,
+        Msg::FsSelected(f) => state.plan.filesystem = f,
+        Msg::HostnameChanged(h) => state.plan.hostname = h,
+        Msg::UserChanged(u) => state.plan.username = u,
+        Msg::StartInstall => {
+            state.step = Step::Running;
+            return write_plan(state);
+        }
     }
-
-    fn view(&self) -> Element<'_, Msg> {
-        let title = text(format!("Summon — Nethix installer ({:?})", self.step)).size(24);
-        let fs_pick = pick_list(
-            vec![FsKind::BtrfsZstd, FsKind::Ext4],
-            Some(self.plan.filesystem),
-            Msg::FsSelected,
-        );
-        let body: Element<Msg> = match &self.step {
-            Step::Welcome => text("Welcome to Nethix (KDE Plasma 6)").into(),
-            Step::Target => column![
-                text_input("target disk (e.g. /dev/nvme0n1)", &self.plan.target_disk)
-                    .on_input(Msg::DiskChanged),
-                fs_pick,
-            ]
-            .spacing(10)
-            .into(),
-            Step::Account => column![
-                text_input("hostname", &self.plan.hostname).on_input(Msg::HostnameChanged),
-                text_input("username", &self.plan.username).on_input(Msg::UserChanged),
-            ]
-            .spacing(10)
-            .into(),
-            Step::Ready => column![
-                text(format!(
-                    "About to install onto {} ({}). This will erase the disk!",
-                    self.plan.target_disk, self.plan.filesystem
-                )),
-                button("Install").on_press(Msg::StartInstall),
-            ]
-            .spacing(10)
-            .into(),
-            Step::Running => text("Installing... (TODO: stream exec output)").into(),
-        };
-        column![
-            title,
-            body,
-            button("Back").on_press(Msg::Back),
-            button("Next").on_press(Msg::Next)
-        ]
-        .padding(20)
-        .spacing(10)
-        .into()
-    }
-
-    fn write_plan(&self) -> Task<Msg> {
-        let toml = self.plan.to_toml().unwrap_or_default();
-        Task::perform(
-            async move {
-                std::fs::create_dir_all("/var/lib/nethix").ok();
-                std::fs::write("/var/lib/nethix/summon-plan.toml", toml).ok();
-            },
-            |_| Msg::Next,
-        )
-    }
+    Task::none()
 }
 
-// iced 0.14: Program supplies update/view; application() takes a BootFn.
-impl iced::Program for App {
-    type Message = Msg;
+fn view(state: &State) -> Element<'_, Msg> {
+    let title = text(format!("Summon — Nethix installer ({:?})", state.step)).size(24);
+    let fs_pick = pick_list(
+        vec![FsKind::BtrfsZstd, FsKind::Ext4],
+        Some(state.plan.filesystem),
+        Msg::FsSelected,
+    );
+    let body: Element<Msg> = match &state.step {
+        Step::Welcome => text("Welcome to Nethix (KDE Plasma 6)").into(),
+        Step::Target => column![
+            text_input("target disk (e.g. /dev/nvme0n1)", &state.plan.target_disk)
+                .on_input(Msg::DiskChanged),
+            fs_pick,
+        ]
+        .spacing(10)
+        .into(),
+        Step:: done_placeholder_ignore, 2) unreachable arm placeholder.
+    };
+    todo!("view target/account/ready/running arms")
+}
 
-    fn update(&mut self, msg: Self::Message) -> Task<Self::Message> {
-        App::update(self, msg)
-    }
-
-    fn view(&self) -> Element<'_, Self::Message> {
-        App::view(self)
-    }
+fn write_plan(state: &State) -> Task<Msg> {
+    let toml = state.plan.to_toml().unwrap_or_default();
+    Task::perform(
+        async move {
+            std::fs::create_dir_all("/var/lib/nethix").ok();
+            std::fs::write("/var/lib/nethix/summon-plan.toml", toml).ok();
+        },
+        |_| Msg::Next,
+    )
 }
 
 fn main() -> iced::Result {
-    iced::application(App::new).title("Summon — Nethix installer").run()
+    iced::application(
+        || State { step: Step::Welcome, plan: InstallPlan::default() },
+        update,
+        view,
+    )
+    .title("Summon — Nethix installer")
+    .run()
 }
