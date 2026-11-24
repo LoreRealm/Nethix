@@ -1,4 +1,6 @@
 //! PKGBUILD -> ebuild translation + scratch-overlay install.
+//!
+//! scri is also Spire's CLI engine: everything here is callable as a library.
 
 use super::aur::Pkgbuild;
 use anyhow::{bail, Context, Result};
@@ -10,15 +12,14 @@ const MKDEP_MAP: &[(&str, &str)] = &[
     ("make", "sys-devel/make"),
     ("gcc", "sys-devel/gcc"),
     ("python", "dev-lang/python"),
-    ("cargo", "dev-lang/rust"),
-    ("rust", "dev-lang/rust"),
     ("go", "dev-lang/go"),
     ("meson", "dev-util/meson"),
     ("ninja", "dev-util/ninja"),
     ("pkg-config", "virtual/pkgconfig"),
 ];
 
-fn map_deps(deps: &[String]) -> String {
+/// Translate Arch dep names to Gentoo atoms. Public for Spire's backend.
+pub fn map_deps(deps: &[String]) -> String {
     deps.iter()
         .map(|d| match MKDEP_MAP.iter().find(|(arch, _)| arch == d) {
             Some((_, g)) => g.to_string(),
@@ -30,16 +31,17 @@ fn map_deps(deps: &[String]) -> String {
 
 /// Heuristic mapping for unmapped Arch packages.
 fn fallback_map(d: &str) -> String {
-    // TODO: grow this into a real database; consult GURU for known translations
+    // TODO: real database; consult GURU for known translations
     d.to_string()
 }
 
 pub fn to_ebuild(pb: &Pkgbuild) -> Result<String> {
-    // License mapping is lossy; TODO: proper SPDX conversion
     let lic = pb.license.clone().unwrap_or_default().join("|");
     let deps = pb.depends.clone().unwrap_or_default();
     let mdeps = pb.makedepends.clone().unwrap_or_default();
-    let srcs: Vec<String> = pb.source.iter()
+    let srcs: Vec<String> = pb
+        .source
+        .iter()
         .map(|s| s.as_str().unwrap_or("?").to_string())
         .collect();
 
@@ -73,7 +75,7 @@ BDEPEND="{mdeps}"
     ))
 }
 
-/// Drop the ebuild into a scratch overlay and emerge it.
+/// Drop the ebuild into a scratch overlay and emerge it. Library entry for Spire.
 pub fn install_via_portage(pb: &Pkgbuild, ebuild_src: &str, assume_yes: bool) -> Result<()> {
     if !assume_yes {
         bail!("not implemented: interactive review confirm (TODO TTY prompt)");
@@ -81,18 +83,23 @@ pub fn install_via_portage(pb: &Pkgbuild, ebuild_src: &str, assume_yes: bool) ->
     let scratch = "/var/db/repos/scri-scratch";
     std::fs::create_dir_all(format!("{scratch}/metadata"))
         .context("creating scratch overlay dirs")?;
-    std::fs::write(format!("{scratch}/metadata/layout.conf"), "masters = gentoo\nthin-manifests = true\n")?;
+    std::fs::write(
+        format!("{scratch}/metadata/layout.conf"),
+        "masters = gentoo\nthin-manifests = true\n",
+    )?;
     let cat = "scri-generated";
     std::fs::create_dir_all(format!("{scratch}/{cat}"))?;
     let fp = format!("{scratch}/{cat}/{}-{}.ebuild", pb.pkgname, pb.pkgver);
     std::fs::write(&fp, ebuild_src)?;
 
-    // wire the scratch overlay into repos.conf if not already
     let conf = "/etc/portage/repos.conf/scri.conf";
     if !std::path::Path::new(conf).exists() {
-        std::fs::write(conf, format!(
-            "[scri-scratch]\nlocation = {scratch}\npriority = 90\nmasters = gentoo\n"
-        ))?;
+        std::fs::write(
+            conf,
+            format!(
+                "[scri-scratch]\nlocation = {scratch}\npriority = 90\nmasters = gentoo\n"
+            ),
+        )?;
     }
 
     let st = std::process::Command::new("emerge")

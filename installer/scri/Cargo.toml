@@ -3,6 +3,14 @@ name = "scri"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "scri"
+path = "src/main.rs"
+
+[lib]
+name = "scri_lib"
+path = "src/lib.rs"
+
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }

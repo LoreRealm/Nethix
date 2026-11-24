@@ -1,12 +1,5 @@
-//! scri — AUR helper for Nethix.
-//!
-//! Scrapes the AUR RPC for any package, converts PKGBUILD -> ephemeral ebuild,
-//! lets the user REVIEW (not edit — read-only preview) the generated ebuild
-//! plus a risk report, then builds via portage in a scratch overlay.
-
-mod aur;
-mod convert;
-mod risk;
+//! CLI wrapper over the scri library.
+//! (search/review/install logic mirrors lib API for terminal use)
 
 use anyhow::{bail, Result};
 use clap::Parser;
@@ -32,38 +25,50 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Search { query } => {
-            let results = aur::search(&query)?;
+            let results = scri_lib::aur::search(&query)?;
             for r in results {
                 println!(
                     "{:<32} {:>6} {:<18} {}",
-                    r.name, r.num_votes, r.maintainer.as_deref().unwrap_or("(orphaned)"),
+                    r.name,
+                    r.num_votes,
+                    r.maintainer.as_deref().unwrap_or("(orphaned)"),
                     r.description.as_deref().unwrap_or("")
                 );
             }
         }
         Cmd::Review { pkg } => {
-            let pb = aur::pkgbuild(&pkg)?;
-            let report = risk::assess(&pb);
+            let pb = scri_lib::aur::pkgbuild(&pkg)?;
+            let report = scri_lib::risk::assess(&pb);
             println!("=== risk report: {} ===", pb.pkgname);
             for f in &report.findings {
                 println!("[{:?}] {}", f.severity, f.detail);
             }
-            if report.findings.iter().any(|f| f.severity == risk::Severity::High) {
+            if report
+                .findings
+                .iter()
+                .any(|f| f.severity == scri_lib::risk::Severity::High)
+            {
                 println!("\nHIGH-severity findings present. install will refuse without --yes after second review.");
             }
             println!("\n=== proposed ebuild (read-only preview) ===");
-            let eb = convert::to_ebuild(&pb)?;
+            let eb = scri_lib::convert::to_ebuild(&pb)?;
             println!("{}", eb);
         }
         Cmd::Install { pkg, yes } => {
-            let pb = aur::pkgbuild(&pkg)?;
-            let report = risk::assess(&pb);
-            let high = report.findings.iter().any(|f| f.severity == risk::Severity::High);
+            let pb = scri_lib::aur::pkgbuild(&pkg)?;
+            let report = scri_lib::risk::assess(&pb);
+            let high = report
+                .findings
+                .iter()
+                .any(|f| f.severity == scri_lib::risk::Severity::High);
             if high && !yes {
-                bail!("HIGH-severity risk findings; rerun with --yes to accept, or run `scri review {}` first", pkg);
+                bail!(
+                    "HIGH-severity risk findings; rerun with --yes to accept, or run `scri review {}` first",
+                    pkg
+                );
             }
-            let eb = convert::to_ebuild(&pb)?;
-            return convert::install_via_portage(&pb, &eb, yes);
+            let eb = scri_lib::convert::to_ebuild(&pb)?;
+            return scri_lib::convert::install_via_portage(&pb, &eb, yes);
         }
     }
     Ok(())
