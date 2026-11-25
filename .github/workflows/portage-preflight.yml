@@ -26,10 +26,9 @@ name: portage-preflight
 #
 # RUNNER SELECTION: set the NETHIX_RUNNERS repo variable
 # (Settings → Secrets and variables → Actions → Variables):
-#   unset      → self-hosted (private-repo default, $0 today)
-#   hosted     → ubuntu-latest (GitHub-hosted; free & unlimited on public
-#                repos — the right choice once this repo is public)
-#   label list → any other value is passed through as runner labels
+#   unset      → ubuntu-latest (default: GitHub-hosted, free for public repos)
+#   hosted     → ubuntu-latest (explicit alias for the same)
+#   label list → e.g. "self-hosted nethix" → your own runner (private repo, $0)
 #
 # Runs on push to main and daily (portage tree drifts — yesterday's
 # clean resolve can break on tomorrow's snapshot).
@@ -47,7 +46,7 @@ permissions:
 
 jobs:
   preflight:
-    runs-on: ${{ vars.NETHIX_RUNNERS == 'hosted' && 'ubuntu-latest' || vars.NETHIX_RUNNERS }}
+    runs-on: ${{ vars.NETHIX_RUNNERS != '' && vars.NETHIX_RUNNERS || 'ubuntu-latest' }}
     timeout-minutes: 30
     container:
       image: gentoo/stage3:latest
