@@ -1,0 +1,85 @@
+name: iso-build-report
+# Full ISO build with automatic log publishing + failure recommendations.
+#
+# On completion the build log is posted to paste.rs and the URL lands in
+# the run summary, so any agent (Lumo, a watchdog, a human on a phone)
+# can fetch plain-text logs without GitHub auth/API gymnastics.
+# The recommendations step pattern-matches known failure modes and prints
+# probable causes + fixes before you even open the log.
+#
+# Manual dispatch (heavy job), plus weekly so drift gets caught.
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '0 6 * * 1'   # Mondays 06:00 UTC
+
+permissions:
+  contents: read
+
+env:
+  LOG: /tmp/iso-build.log
+  PASTE_URL: ''
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    container:
+      image: gentoo/stage3:latest
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the ISO (log captured)
+        run: |
+          chmod +x iso/build.sh
+          bash iso/build.sh 2>&1 | tee "$LOG"
+          echo "BUILD_STATUS=ok" >> "$GITHUB_ENV"
+
+      # Runs on failure only; captures log tail before the job dies
+      - name: Capture failure
+        if: failure()
+        run: |
+          echo "BUILD_STATUS=failed" >> "$GITHUB_ENV"
+          tail -c 200000 "$LOG" > /tmp/iso-build-tail.log || true
+
+      - name: Recommendations (failure triage)
+        if: always()
+        run: |
+          bash .github/scripts/recommend.sh "$LOG"
+
+      - name: Publish log to paste.rs
+        if: always()
+        run: |
+          # scrub secrets-ish lines, then upload
+          sed -E 's/(chpasswd|password|PASS)=.*/\1=[scrubbed]/g' "$LOG" > /tmp/log.clean
+          # paste.rs: POST body -> returns URL. Timeout-guarded; skip quietly if down.
+          URL=$(curl -sf --max-time 60 --data-binary @/tmp/log.clean https://paste.rs/) || URL="paste.rs unavailable"
+          echo "PASTE_URL=$URL" >> "$GITHUB_ENV"
+          {
+            echo "## Build log"
+            echo ""
+            echo "Full (scrubbed) log: $URL"
+            echo ""
+            echo "Status: ${BUILD_STATUS:-unknown}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          # also emit as an output-ish marker line for log-scrapers
+          echo "::notice title=Log URL::$URL"
+
+      - name: Upload ISO artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nethix-live-iso
+          path: "*.iso"
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload log artifact (fallback)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: /tmp/log.clean
+          if-no-files-found: warn
+          retention-days: 30
