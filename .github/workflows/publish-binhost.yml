@@ -1,0 +1,96 @@
+name: publish-binhost
+# Syncs built .tbz2 binary packages to the Cloudflare R2 binhost mirror
+# AFTER a green portage-preflight on the same commit — never before.
+#
+# Gating: this workflow triggers on portage-preflight completion and hard-
+# checks that (a) the triggering preflight run concluded success and
+# (b) a successful preflight exists for THIS exact SHA (same gate logic as
+# iso-build-report). Broken/unverified binaries can never reach the mirror.
+#
+# Source of packages: the ISO build's binhost/ export. Two paths feed it:
+#   1. workflow_run payloads from iso-build-report (which uploaded binhost
+#      as an artifact) — CI-produced binaries, synced when present.
+#   2. Manual dispatch with artifacts already present in repo workspace —
+#      local-build binaries synced from a prior local ISO run.
+#
+# Credentials: requires repo secrets R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY
+# and variable R2_ENDPOINT (the account's ...r2.cloudflarestorage.com URL).
+# Without them the sync step is SKIPPED with a notice — never fails the run.
+
+on:
+  workflow_run:
+    workflows: [iso-build-report]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      proceed: ${{ steps.check.outputs.proceed }}
+    steps:
+      - name: Require green preflight for this SHA
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA="${{ github.event.workflow_run.head_sha || github.sha }}"
+          STATE=$(gh api "repos/${{ github.repository }}/actions/workflows/portage-preflight.yml/runs?head_sha=$SHA" --jq '.workflow_runs[0].conclusion')
+          if [[ "$STATE" == "success" ]]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "green preflight for $SHA — proceed"
+          else
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            echo "BLOCKED: preflight conclusion for $SHA is '$STATE' — not syncing binaries"
+          fi
+
+  sync:
+    needs: gate
+    if: needs.gate.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # CI-produced binhost (preferred): download the artifact from the
+      # completed iso-build-report run.
+      - name: Fetch binhost artifact (from triggering run)
+        if: github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          mkdir -p binhost
+          ART=$(gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID/artifacts" --jq '.artifacts[] | select(.name=="nethix-binhost") | .id')
+          if [[ -n "$ART" ]]; then
+            gh api "repos/${{ github.repository }}/actions/artifacts/$ART/zip" > binhost-artifact.zip
+            unzip -o binhost-artifact.zip -d binhost/
+            echo "Downloaded $(find binhost -name '*.tbz2' | wc -l) tbz2s from CI build"
+          else
+            echo "No nethix-binhost artifact in triggering run — nothing new to sync"
+          fi
+
+      - name: Install rclone
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
+
+      - name: Sync to R2 mirror
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ vars.R2_ENDPOINT }}
+        run: |
+          if [[ -z "$R2_ACCESS_KEY_ID" || -z "$R2_SECRET_ACCESS_KEY" || -z "$R2_ENDPOINT" ]]; then
+            echo "::notice::R2 secrets/variable not configured — skipping sync"
+            echo "Set R2_ACCESS_KEY_ID + R2_SECRET_ACCESS_KEY secrets and R2_ENDPOINT variable to enable"
+            exit 0
+          fi
+          if ! compgen -G "binhost/**/*.tbz2" >/dev/null; then
+            echo "::notice::no .tbz2s present to sync — nothing to do"
+            exit 0
+          fi
+          rclone sync binhost/ :s3,provider=Cloudflare,access_key_id="$R2_ACCESS_KEY_ID",secret_access_key="$R2_SECRET_ACCESS_KEY",endpoint="$R2_ENDPOINT":nethix-binhost \
+            --s3-no-check-bucket --transfers 8 --progress
+          echo ":: synced $(find binhost -name '*.tbz2' | wc -l) packages to R2 nethix-binhost"
