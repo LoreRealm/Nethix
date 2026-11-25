@@ -24,6 +24,18 @@ name: portage-preflight
 # (iso-build-report workflow) — resolve-verified commits go straight
 # to a build without anyone clicking anything.
 #
+# RUNNER SELECTION (dual-mode, $0 budget today):
+#   Set the repo variable NETHIX_RUNNERS (Settings → Secrets and
+#   variables → Actions → Variables):
+#     - unset or "hosted"     → ubuntu-latest (GitHub-hosted, bills minutes)
+#     - any other value       → treated as runner LABELS, space-separated
+#                               e.g. "self-hosted nethix" → your PC, free
+#   Default is the self-hosted pair [self-hosted, nethix] because this
+#   repo is PRIVATE: hosted minutes are metered (2000/mo free tier) and
+#   one ISO build costs ~360 of them. Register a runner on your machine:
+#     Settings → Actions → Runners → New self-hosted runner, label "nethix".
+#   When budget allows switching to hosted, just set NETHIX_RUNNERS=hosted.
+#
 # Runs on push to main and daily (portage tree drifts — yesterday's
 # clean resolve can break on tomorrow's snapshot).
 on:
@@ -40,7 +52,7 @@ permissions:
 
 jobs:
   preflight:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.NETHIX_RUNNERS == '' && 'self-hosted' || vars.NETHIX_RUNNERS }}
     timeout-minutes: 30
     container:
       image: gentoo/stage3:latest
