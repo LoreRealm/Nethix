@@ -7,7 +7,7 @@
 #   3. emerge live set (+ linux-firmware for hardware compatibility)
 #   4. installer binaries — pulled from nethix-artifacts repo (public)
 #   5. liveuser
-#   6. kernel + initramfs (dracut) install to boot/
+#   6. kernel + initramfs via portage (kernel-build eclass + installkernel/dracut)
 #   7. squashfs + xorriso into ISO
 #   8. binhost export — collect built .tbz2 packages for reuse
 #
@@ -242,8 +242,16 @@ chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 /bin/bash -c '
     echo "liveuser:liveuser" | chpasswd
 '
 
-# --- 6. kernel + initramfs
-say "installing kernel + dracut initramfs..."
+# --- 6. kernel + initramfs — entirely via portage.
+# nethix-sources inherits kernel-build; with USE=initramfs and
+# installkernel[dracut] (pre-seeded in package.use above), the emerge
+# itself compiles the kernel, installs vmlinuz + modules to /boot and
+# /lib/modules, and generates the initramfs. The OLD manual `make` pass
+# is GONE: running make on the installed /usr/src tree breaks because
+# the installed tree is not a full build tree (missing generated awk
+# tooling like cpufeaturemasks.awk — hence the previous
+# "No rule to make target 'arch/x86/tools/cpufeaturemasks.awk'" failure).
+say "installing kernel + initramfs via portage (kernel-build + dracut)..."
 
 # The Manifest shipped in the repo is generated from a known-good download;
 # refresh it inside the chroot so checksums always match reality before emerging.
@@ -252,16 +260,12 @@ chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 bash -ec "
     ebuild nethix-sources-$KERNEL_PV.ebuild manifest || true
 "
 
-run_charm "forging kernel" chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 /bin/bash -ec "
+run_charm "forging kernel" chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 \
     emerge --autounmask-write --autounmask-continue sys-kernel/nethix-sources
-    KDIR=\$(ls -d /usr/src/linux-* | sort -Vr | head -n1)
-    echo \"building kernel in \$KDIR\"
-    cd \"\$KDIR\"
-    make -s olddefconfig
-    make -s -j$JOBS
-    make -s modules_install
-    INSTALL_PATH=/boot make -s install
-"
+
+# initramfs: kernel-build + installkernel[dracut] should have generated it
+# already; regenerate all as a belt-and-braces measure so /boot always has
+# an initramfs matching the installed kernel even if the USE plumbing lags.
 chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 dracut --force --regenerate-all --hostonly=no \
     || die "dracut failed — initramfs missing"
 
