@@ -1,0 +1,63 @@
+# @nethix-desktop — baseline desktop package set (skeleton, tier-1 only)
+#
+# Rule: only atoms verified to exist in ::gentoo / ::guru land here.
+# Grow incrementally; run `emerge -p @nethix-desktop` after each addition.
+# Packages with unclear names stay OUT until verified with `emerge -s`.
+#
+# Consumed by: emerge @nethix-desktop  (inside the ISO build chroot,
+# with FEATURES=buildpkg — every package lands in the binhost).
+
+# --- CLI / shell niceties ---
+app-misc/fastfetch
+app-shells/starship
+app-shells/zoxide
+app-misc/ripgrep
+app-editors/vim
+app-editors/micro
+app-misc/magic-wormhole
+
+# --- filesystems / disks ---
+sys-fs/btrfs-progs
+sys-fs/dosfstools
+sys-fs/e2fsprogs
+sys-fs/xfsprogs
+sys-fs/lvm2
+sys-fs/mdadm
+sys-fs/cryptsetup
+sys-fs/squashfs-tools
+sys-apps/smartmontools
+sys-apps/dmidecode
+sys-apps/hdparm
+sys-block/gparted
+
+# --- archiving ---
+app-arch/unzip
+app-arch/unrar
+app-arch/p7zip
+
+# --- hardware utilities ---
+sys-apps/usbutils
+sys-apps/pciutils
+sys-apps/ethtool
+sys-power/cpupower
+sys-power/upower
+
+# --- portage tooling (replaces pacman-contrib/pkgfile/reflector) ---
+app-portage/gentoolkit
+app-portage/portage-utils
+
+# --- fonts ---
+media-fonts/noto
+media-fonts/dejavu
+media-fonts/liberation-fonts
+media-fonts/fira-code
+media-fonts/jetbrains-mono
+
+# --- audio (PipeWire) ---
+media-video/pipewire
+media-video/wireplumber
+media-sound/pavucontrol
+
+# --- graphics ---
+media-libs/mesa
+media-libs/vulkan-loader
