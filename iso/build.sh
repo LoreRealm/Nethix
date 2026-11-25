@@ -9,6 +9,7 @@
 #   5. liveuser
 #   6. kernel + initramfs (dracut) install to boot/
 #   7. squashfs + xorriso into ISO
+#   8. binhost export — collect built .tbz2 packages for reuse
 #
 # Requirements: root, ~30 GB free. Run from anywhere.
 set -euo pipefail
@@ -118,13 +119,15 @@ else
     say "WARN: profiles.d/makeconf.amd64-v3 not found; using stage3 default make.conf"
 fi
 # Hardware-adapted + quiet build settings appended to the chroot make.conf:
-# MAKEOPTS from detection above, and quiet portage output (progress/errors
-# only — no per-file compiler spam in the logs).
+# MAKEOPTS from detection above, quiet portage output (progress/errors only),
+# and buildpkg so every emerged package also produces a reusable .tbz2 in
+# /var/cache/binpkgs — harvested in stage 8 into binhost/.
 cat >> "$WORK/root/etc/portage/make.conf" <<EOF
 
-# --- injected by iso/build.sh (hardware detection + quiet output) ---
+# --- injected by iso/build.sh (hardware detection + quiet output + binhost) ---
 MAKEOPTS="-j$JOBS -l$JOBS"
 EMERGE_DEFAULT_OPTS="--quiet-build=y --quiet-fail=y --verbose=n --ask=n"
+FEATURES="buildpkg binpkg-multi-instance"
 EOF
 # fail fast on a broken make.conf instead of letting portage spew cryptic
 # "bad substitution" errors halfway through the build
@@ -214,9 +217,9 @@ chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 bash -ec "
 
 chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 /bin/bash -ec "
     emerge --autounmask-write --autounmask-continue sys-kernel/nethix-sources
-    KDIR=\\$(ls -d /usr/src/linux-* | sort -Vr | head -n1)
-    echo \\\"building kernel in \\\$KDIR\\\"
-    cd \\\"\\\$KDIR\\\"
+    KDIR=\$(ls -d /usr/src/linux-* | sort -Vr | head -n1)
+    echo \"building kernel in \$KDIR\"
+    cd \"\$KDIR\"
     make -s olddefconfig
     make -s -j$JOBS
     make -s modules_install
@@ -274,4 +277,22 @@ xorriso -as mkisofs -iso-level 3 -volid NETHIX_LIVE \
     /bios-boot.img="$WORK/iso-root/bios-boot.img"
 
 [[ -f "$REPO_ROOT/$OUT_ISO" ]] || die "ISO output missing"
+
+# --- 8. binhost export
+# buildpkg (set in make.conf) made portage drop a .tbz2 for every package
+# it emerged into the chroot's /var/cache/binpkgs. Harvest those into a
+# persistent, git-ignorable directory OUTSIDE .iso-build so the next build
+# (or an installed Nethix system via PORTAGE_BINHOST) can reuse them without
+# recompiling. Mirroring these to the nethix-artifacts repo as release
+# assets turns it into a full binhost — see binhost/README there.
+BINPKGS="$REPO_ROOT/binhost"
+if compgen -G "$WORK/root/var/cache/binpkgs/**/*.tbz2" >/dev/null 2>&1; then
+    say "exporting built packages to binhost/..."
+    mkdir -p "$BINPKGS"
+    cp -a "$WORK/root/var/cache/binpkgs/." "$BINPKGS/"
+    say "binhost: $(find "$BINPKGS" -name '*.tbz2' | wc -l) packages in $BINPKGS"
+else
+    say "WARN: no binary packages were produced (FEATURES=buildpkg didn't fire?)"
+fi
+
 say "done: $REPO_ROOT/$OUT_ISO"
