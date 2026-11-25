@@ -4,6 +4,7 @@ installer/target/
 # binhost output
 out/
 dist/
+binhost/
 
 # editor/os
 *.swp
