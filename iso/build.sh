@@ -176,10 +176,13 @@ EOF
 bash -n "$WORK/root/etc/portage/make.conf" \
     || die "make.conf has a shell syntax error — fix it before continuing"
 
-# accept ~amd64 for the nethix kernel so emerge doesn't die on keyword mask
+# accept ~amd64 for the nethix kernel + firmware snapshot so emerge doesn't
+# die on keyword masks
 mkdir -p "$WORK/root/etc/portage/package.accept_keywords"
-echo "sys-kernel/nethix-sources ~amd64" \
-    > "$WORK/root/etc/portage/package.accept_keywords/nethix.conf"
+cat > "$WORK/root/etc/portage/package.accept_keywords/nethix.conf" <<'EOF'
+sys-kernel/nethix-sources ~amd64
+sys-kernel/linux-firmware ~amd64
+EOF
 
 # Pre-seed required USE flags so dependencies resolve without manual
 # autounmask intervention. Necessary-for-the-build flags belong here, not
@@ -193,6 +196,15 @@ sys-kernel/dracut systemd
 # linux-firmware: skip the redistributable-restricted blob splitting; the
 # live image carries everything so hardware Just Works out of the box
 sys-kernel/linux-firmware redistributable
+EOF
+
+# License acceptance: linux-firmware is LICENSE-masked (linux-fw-redistributable).
+# The live image ships the redistributable blobs by design — accept the license
+# in advance so emerge doesn't bail on resolution.
+mkdir -p "$WORK/root/etc/portage/package.license"
+cat > "$WORK/root/etc/portage/package.license/nethix.conf" <<'EOF'
+# redistribute vendor firmware blobs on the live image (see package.use notes)
+sys-kernel/linux-firmware linux-fw-redistributable no-source-code
 EOF
 
 # Distfiles cache: stage3 root's /var/cache may come out with odd perms
