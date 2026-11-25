@@ -33,6 +33,26 @@ die() { printf '\e[1;31m!!\e[0m %s\n' "$*" >&2; exit 1; }
 
 mkdir -p "$WORK"/root
 
+# Hardware-adapted parallelism: prefer total cores, but leave room so a
+# memory-hungry compile (LLVM-linked kernel) doesn't OOM the build host.
+# Rough heuristic: 2 GiB RAM per compile job for this kernel config.
+detect_makeopts() {
+    local cores ram_gb jobs
+    cores=$(nproc)
+    if [[ -r /proc/meminfo ]]; then
+        ram_gb=$(awk '/^MemTotal:/ {printf "%d", $2/1048576}' /proc/meminfo)
+    else
+        ram_gb=16
+    fi
+    # cap by RAM at ~1 job per 2 GiB, never exceed cores, minimum 2
+    jobs=$(( ram_gb / 2 ))
+    (( jobs > cores )) && jobs=$cores
+    (( jobs < 2 )) && jobs=2
+    printf '%s' "$jobs"
+}
+JOBS=$(detect_makeopts)
+say "detected hardware: $(nproc) cores, using -j$JOBS for portage/kernel builds"
+
 # Peel any stale mounts left by a previous crashed/killed build, deepest-first.
 # Lazy+loop because stacked rbinds (dev/pts under dev) resist a single -R pass.
 cleanup_mounts() {
@@ -97,6 +117,15 @@ if [[ -f profiles.d/makeconf.amd64-v3 ]]; then
 else
     say "WARN: profiles.d/makeconf.amd64-v3 not found; using stage3 default make.conf"
 fi
+# Hardware-adapted + quiet build settings appended to the chroot make.conf:
+# MAKEOPTS from detection above, and quiet portage output (progress/errors
+# only — no per-file compiler spam in the logs).
+cat >> "$WORK/root/etc/portage/make.conf" <<EOF
+
+# --- injected by iso/build.sh (hardware detection + quiet output) ---
+MAKEOPTS="-j$JOBS -l$JOBS"
+EMERGE_DEFAULT_OPTS="--quiet-build=y --quiet-fail=y --verbose=n --ask=n"
+EOF
 # fail fast on a broken make.conf instead of letting portage spew cryptic
 # "bad substitution" errors halfway through the build
 bash -n "$WORK/root/etc/portage/make.conf" \
@@ -127,7 +156,7 @@ say "emerging minimal live set..."
 chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 /bin/bash -c '
     set -e
     emerge-webrsync || emerge --sync || true
-    emerge --ask=n --autounmask-write app-misc/fastfetch || true
+    emerge --autounmask-write app-misc/fastfetch || true
 '
 
 # --- 4. installer binaries from artifacts repo (public)
@@ -184,14 +213,14 @@ chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 bash -ec "
 "
 
 chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 /bin/bash -ec "
-    emerge --ask=n --autounmask-write --autounmask-continue sys-kernel/nethix-sources
-    KDIR=\$(ls -d /usr/src/linux-* | sort -Vr | head -n1)
-    echo \"building kernel in \$KDIR\"
-    cd \"\$KDIR\"
-    make olddefconfig
-    make -j\$(nproc)
-    make modules_install
-    INSTALL_PATH=/boot make install
+    emerge --autounmask-write --autounmask-continue sys-kernel/nethix-sources
+    KDIR=\\$(ls -d /usr/src/linux-* | sort -Vr | head -n1)
+    echo \\\"building kernel in \\\$KDIR\\\"
+    cd \\\"\\\$KDIR\\\"
+    make -s olddefconfig
+    make -s -j$JOBS
+    make -s modules_install
+    INSTALL_PATH=/boot make -s install
 "
 chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 dracut --force --regenerate-all --hostonly=no \
     || die "dracut failed — initramfs missing"
@@ -199,7 +228,7 @@ chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 dracut --force --reg
 # --- 7. squashfs + ISO
 say "packing squashfs..."
 mkdir -p "$WORK/iso-root"
-mksquashfs "$WORK/root" "$WORK/iso-root/live.squashfs" -comp zstd -Xcompression-level 19
+mksquashfs "$WORK/root" "$WORK/iso-root/live.squashfs" -comp zstd -Xcompression-level 19 -processors "$JOBS"
 
 KIMG=$(ls "$WORK/root/boot"/vmlinuz-* 2>/dev/null | head -n1)
 [[ -n "$KIMG" ]] || die "no kernel image in chroot /boot"
