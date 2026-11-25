@@ -30,8 +30,8 @@ BDEPEND="
 # CachyOS's shipped config — committed to the repo in files/ so the ebuild
 # stays hermetic (design goal: no live-network dependency for inputs we
 # control). files/7.3/config-cachyos is fetched/updated by
-# scripts/fetch-cachy-patches.sh.
-CONFIG_FILE="${FILESDIR}/${PV}/config-cachyos"
+# scripts/fetch-cachy-patches.sh and hash-pinned in the Manifest.
+CONFIG_FILE="${FILESDIR}/7.3/config-cachyos"
 
 pkg_setup() {
     ewarn "Using the CachyOS shipped config (config-cachyos)."
@@ -50,7 +50,7 @@ src_unpack() {
 
 src_prepare() {
     default
-    [[ -f ${CONFIG_FILE} ]] || die "config-cachyos missing from FILESDIR — run scripts/fetch-cachy-patches.sh ${PV%%.*}.${PV#*.}"
+    [[ -f ${CONFIG_FILE} ]] || die "config-cachyos missing from FILESDIR — run scripts/fetch-cachy-patches.sh"
     # Ship the pinned CachyOS config as the base .config
     cp "${CONFIG_FILE}" "${S}/.config" || die "failed to install config"
     # Match CachyOS's localversion treatment so modules land under
