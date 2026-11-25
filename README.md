@@ -30,6 +30,29 @@ Nethix is a **Gentoo-based Linux distribution** pairing Gentoo's source flexibil
 
 Legend: ✅ works · ⚠️ written but unvalidated · 🚧 planned/in-progress
 
+## Fastfetch
+
+The live ISO ships a themed fastfetch config (in `configs/fastfetch/`), so a fresh boot greets you with system info in Nethix styling. Out of the box it displays the usual Linux fetch fields, themed to match the distro:
+
+```
+        uwu@VIctory        OS: Nethix x86_64 (pre-alpha)
+      ┌──────────────┐     Kernel: Linux 7.3.6-cachyos (EEVDF, Cachy Sauce)
+      │   ◢ Nethix   │     Uptime: 3 mins
+      │   ascii art  │     Packages: 412 (portage)
+      │   goes here  │     Shell: bash 5.3
+      └──────────────┘     WM: niri (Wayland)
+                           Terminal: ghostty
+                           CPU: AMD Ryzen 9 7950X (32) @ 4.5GHz
+                           GPU: AMD Radeon RX 7900 XTX
+                           Memory: 2.1 GiB / 32 GiB
+```
+
+The config is a plain `neofetch`-style jsonc — colors, separator, and module list are all standard fastfetch options, so it's trivially portable to a normal fastfetch install:
+
+```bash
+fastfetch --config configs/fastfetch/nethix.jsonc
+```
+
 ## Quickstart
 
 ```bash
@@ -62,4 +85,4 @@ sudo ./iso/build.sh
 
 ## License
 
-Undecided (GPL-3 recommended before public release — Gentoo/kernel-derived). Private until then.
+Nethix is licensed under [GPL-3.0](LICENSE) — the same copyleft family as Gentoo's portage tooling and the kernel sources it builds on. Anyone is free to use, modify, and redistribute Nethix and its tools, provided derivative works stay under GPL-3.0 with sources shared.
