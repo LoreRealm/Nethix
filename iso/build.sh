@@ -14,6 +14,11 @@
 # Requirements: ~35 GB free (firmware is chunky). Run from anywhere —
 # needs root, relaunches itself via sudo or pkexec (pkexec survives
 # broken /dev/pty states that break sudo password prompts).
+#
+# SPEED: if a previous build exported packages into <repo>/binhost/
+# (stage 8), this build REUSES them automatically — the big compiles
+# (LLVM/clang toolchain, kernel deps) install as prebuilts instead of
+# recompiling. First build ~90 min, second build onward ~15-20 min.
 set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -152,7 +157,17 @@ if [[ -f profiles.d/makeconf.amd64-v3 ]]; then
 else
     say "WARN: profiles.d/makeconf.amd64-v3 not found; using stage3 default make.conf"
 fi
-bash iso/portage-seed.sh "$WORK/root" "$JOBS"
+
+# Binhost reuse: if a previous build exported .tbz2s into <repo>/binhost/,
+# feed them to this build so portage installs prebuilts instead of
+# recompiling. Fresh clones/first builds just skip this (full source).
+BINHOST_DIR="$REPO_ROOT/binhost"
+if compgen -G "$BINHOST_DIR/**/*.tbz2" >/dev/null 2>&1; then
+    say "binhost found: $(find "$BINHOST_DIR" -name '*.tbz2' | wc -l) reusable packages"
+else
+    BINHOST_DIR=""   # nothing usable — full source build
+fi
+bash iso/portage-seed.sh "$WORK/root" "$JOBS" "$BINHOST_DIR"
 
 # Distfiles cache: stage3 root's /var/cache may come out with odd perms
 # (the __portage_test_write__ denial we saw). Ensure portage can write.
@@ -243,9 +258,15 @@ chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 \
     || die "dracut failed — initramfs missing"
 
 # --- 7. squashfs + ISO
+# zstd -15 instead of -19: ~2-4% larger ISO, ~2x faster packing. Level 19
+# on a live root is a poor cost/benefit for a build artifact. -quiet +
+# -no-progress kill the per-byte spinner spam; the stage banner is enough.
 say "packing squashfs..."
 mkdir -p "$WORK/iso-root"
-mksquashfs "$WORK/root" "$WORK/iso-root/live.squashfs" -comp zstd -Xcompression-level 19 -processors "$JOBS"
+mksquashfs "$WORK/root" "$WORK/iso-root/live.squashfs" \
+    -comp zstd -Xcompression-level 15 \
+    -processors "$JOBS" \
+    -quiet -no-progress
 
 KIMG=$(ls "$WORK/root/boot"/vmlinuz-* 2>/dev/null | head -n1)
 [[ -n "$KIMG" ]] || die "no kernel image in chroot /boot"
