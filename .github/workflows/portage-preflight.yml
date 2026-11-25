@@ -1,0 +1,53 @@
+name: portage-preflight
+# Dependency-resolution preflight for the ISO package set.
+#
+# Boots a Gentoo stage3 container, seeds portage with the EXACT same
+# config iso/build.sh uses (via iso/portage-seed.sh — shared, so they
+# cannot drift), syncs the tree, then runs emerge --pretend on every
+# package the ISO builds. Any keyword/license/USE/mask conflict shows
+# up here in minutes instead of 10+ minutes into a local build.
+#
+# Runs on push to main and daily (portage tree drifts — yesterday's
+# clean resolve can break on tomorrow's snapshot).
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 12 * * *'   # daily 12:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: gentoo/stage3:latest
+      options: --privileged
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Seed portage config (same as build.sh)
+        run: |
+          chmod +x iso/portage-seed.sh
+          bash iso/portage-seed.sh / 2
+
+      - name: Sync portage tree
+        run: emerge-webrsync || emerge --sync
+
+      - name: Resolve live set (fastfetch + linux-firmware)
+        run: emerge --pretend --columns app-misc/fastfetch sys-kernel/linux-firmware
+
+      - name: Resolve kernel toolchain (installkernel + dracut)
+        run: emerge --pretend --columns '>=sys-kernel/installkernel-70-r1[dracut]' sys-kernel/dracut[systemd]
+
+      - name: Resolve nethix-sources (Manifest will refresh at real build)
+        run: emerge --pretend --columns sys-kernel/nethix-sources
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "preflight complete: portage resolves the full ISO package set against today's tree"

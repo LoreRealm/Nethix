@@ -3,7 +3,7 @@
 #
 # Stages:
 #   1. chroot prep (stage3 download, bind mounts, resolv.conf, locale)
-#   2. overlay + profile injection
+#   2. overlay + profile injection  (via iso/portage-seed.sh — shared with CI preflight)
 #   3. emerge live set (+ linux-firmware for hardware compatibility)
 #   4. installer binaries — pulled from nethix-artifacts repo (public)
 #   5. liveuser
@@ -20,7 +20,7 @@ REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$REPO_ROOT"
 
 # self-heal the executable bit (git checkouts from zip/other hosts can lose it)
-chmod +x "$0" iso/charm-bar.sh 2>/dev/null || true
+chmod +x "$0" iso/charm-bar.sh iso/portage-seed.sh 2>/dev/null || true
 
 # Progress output: SIMPLE by default — portage's own stage banners, package
 # names and errors, nothing else. The rune charm-bar (iso/charm-bar.sh) is
@@ -120,9 +120,7 @@ say "unpacking stage3..."
 tar -xpf "$WORK/stage3.tar.xz" -C "$WORK/root" --xattrs --numeric-owner
 
 cp -L /etc/resolv.conf "$WORK/root/etc/resolv.conf"
-mkdir -p "$WORK/root"/var/db/repos/{nethix,gentoo} \
-         "$WORK/root"/etc/portage/repos.conf \
-         "$WORK/root"/var/cache/distfiles
+mkdir -p "$WORK/root"/var/cache/distfiles
 
 # Bind-mount the virtual filesystems FIRST: locale-gen needs /proc/mounts,
 # portage needs /proc, /sys and /dev for its builds. Everything chrooted
@@ -146,66 +144,15 @@ chroot "$WORK/root" /bin/bash -c '
     locale-gen
 '
 
-# --- 2. overlay + profile
-say "wiring nethix overlay + profile into the chroot..."
-cp -r overlay/* "$WORK/root/var/db/repos/nethix/"
-cat > "$WORK/root/etc/portage/repos.conf/nethix.conf" <<EOF
-[nethix]
-location = /var/db/repos/nethix
-priority = 50
-masters = gentoo
-EOF
+# --- 2. overlay + profile + portage config (ALL of it via the shared seeder,
+# so local builds and CI preflight test the identical configuration) ---
+say "wiring nethix overlay + portage config via portage-seed.sh..."
 if [[ -f profiles.d/makeconf.amd64-v3 ]]; then
     cp profiles.d/makeconf.amd64-v3 "$WORK/root/etc/portage/make.conf"
 else
     say "WARN: profiles.d/makeconf.amd64-v3 not found; using stage3 default make.conf"
 fi
-# Hardware-adapted + quiet build settings appended to the chroot make.conf:
-# MAKEOPTS from detection above, quiet portage output (progress/errors only),
-# and buildpkg so every emerged package also produces a reusable .tbz2 in
-# /var/cache/binpkgs — harvested in stage 8 into binhost/.
-cat >> "$WORK/root/etc/portage/make.conf" <<EOF
-
-# --- injected by iso/build.sh (hardware detection + quiet output + binhost) ---
-MAKEOPTS="-j$JOBS -l$JOBS"
-EMERGE_DEFAULT_OPTS="--quiet-build=y --quiet-fail=y --verbose=n --ask=n"
-FEATURES="buildpkg binpkg-multi-instance"
-EOF
-# fail fast on a broken make.conf instead of letting portage spew cryptic
-# "bad substitution" errors halfway through the build
-bash -n "$WORK/root/etc/portage/make.conf" \
-    || die "make.conf has a shell syntax error — fix it before continuing"
-
-# accept ~amd64 for the nethix kernel + firmware snapshot so emerge doesn't
-# die on keyword masks
-mkdir -p "$WORK/root/etc/portage/package.accept_keywords"
-cat > "$WORK/root/etc/portage/package.accept_keywords/nethix.conf" <<'EOF'
-sys-kernel/nethix-sources ~amd64
-sys-kernel/linux-firmware ~amd64
-EOF
-
-# Pre-seed required USE flags so dependencies resolve without manual
-# autounmask intervention. Necessary-for-the-build flags belong here, not
-# in a human's hands at 4am.
-mkdir -p "$WORK/root/etc/portage/package.use"
-cat > "$WORK/root/etc/portage/package.use/nethix.conf" <<'EOF'
-# nethix-sources[initramfs] requires dracut-capable installkernel
->=sys-kernel/installkernel-70-r1 dracut
-# dracut is systemd-based on our live image
-sys-kernel/dracut systemd
-# linux-firmware: skip the redistributable-restricted blob splitting; the
-# live image carries everything so hardware Just Works out of the box
-sys-kernel/linux-firmware redistributable
-EOF
-
-# License acceptance: linux-firmware is LICENSE-masked (linux-fw-redistributable).
-# The live image ships the redistributable blobs by design — accept the license
-# in advance so emerge doesn't bail on resolution.
-mkdir -p "$WORK/root/etc/portage/package.license"
-cat > "$WORK/root/etc/portage/package.license/nethix.conf" <<'EOF'
-# redistribute vendor firmware blobs on the live image (see package.use notes)
-sys-kernel/linux-firmware linux-fw-redistributable no-source-code
-EOF
+bash iso/portage-seed.sh "$WORK/root" "$JOBS"
 
 # Distfiles cache: stage3 root's /var/cache may come out with odd perms
 # (the __portage_test_write__ denial we saw). Ensure portage can write.
@@ -265,7 +212,7 @@ chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 /bin/bash -c '
 
 # --- 6. kernel + initramfs — entirely via portage.
 # nethix-sources inherits kernel-build; with USE=initramfs and
-# installkernel[dracut] (pre-seeded in package.use above), the emerge
+# installkernel[dracut] (pre-seeded via portage-seed.sh), the emerge
 # itself compiles the kernel, installs vmlinuz + modules to /boot and
 # /lib/modules, and generates the initramfs. The OLD manual `make` pass
 # is GONE: running make on the installed /usr/src tree breaks because
@@ -341,12 +288,12 @@ xorriso -as mkisofs -iso-level 3 -volid NETHIX_LIVE \
 [[ -f "$REPO_ROOT/$OUT_ISO" ]] || die "ISO output missing"
 
 # --- 8. binhost export
-# buildpkg (set in make.conf) made portage drop a .tbz2 for every package
-# it emerged into the chroot's /var/cache/binpkgs. Harvest those into a
-# persistent, git-ignorable directory OUTSIDE .iso-build so the next build
-# (or an installed Nethix system via PORTAGE_BINHOST) can reuse them without
-# recompiling. Mirroring these to the nethix-artifacts repo as release
-# assets turns it into a full binhost — see binhost/README there.
+# buildpkg (set via portage-seed.sh) made portage drop a .tbz2 for every
+# package it emerged into the chroot's /var/cache/binpkgs. Harvest those
+# into a persistent, git-ignorable directory OUTSIDE .iso-build so the next
+# build (or an installed Nethix system via PORTAGE_BINHOST) can reuse them
+# without recompiling. Mirroring these to the nethix-artifacts repo as
+# release assets turns it into a full binhost — see binhost/README there.
 BINPKGS="$REPO_ROOT/binhost"
 if compgen -G "$WORK/root/var/cache/binpkgs/**/*.tbz2" >/dev/null 2>&1; then
     say "exporting built packages to binhost/..."
