@@ -13,12 +13,11 @@ name: iso-build-report
 # probable causes + fixes before you even open the log.
 #
 # RUNNER SELECTION: same dual-mode as portage-preflight — see the header
-# comment there. Defaults to self-hosted (private repo, metered hosted
-# minutes, one ISO build ≈ 360 hosted minutes = 18% of the monthly free
-# tier). Flip with the NETHIX_RUNNERS repo variable when budget allows:
-#   unset  → self-hosted
-#   hosted → ubuntu-latest (mandatory mode on a public repo — never point
-#            self-hosted runners at a public repository)
+# comment there. Set the NETHIX_RUNNERS repo variable:
+#   unset      → self-hosted (private-repo default, $0 today)
+#   hosted     → ubuntu-latest (GitHub-hosted; free & unlimited on public
+#                repos — the right choice once this repo is public)
+#   label list → any other value is passed through as runner labels
 #
 # Manual dispatch (heavy job), plus weekly so drift gets caught.
 on:
@@ -62,7 +61,7 @@ jobs:
   build:
     needs: preflight-gate
     if: needs.preflight-gate.outputs.proceed == 'true'
-    runs-on: ${{ vars.NETHIX_RUNNERS == '' && 'self-hosted' || vars.NETHIX_RUNNERS }}
+    runs-on: ${{ vars.NETHIX_RUNNERS == 'hosted' && 'ubuntu-latest' || vars.NETHIX_RUNNERS }}
     timeout-minutes: 360
     container:
       image: gentoo/stage3:latest
