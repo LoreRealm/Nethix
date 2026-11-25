@@ -21,6 +21,7 @@ STAGE3_URL=${STAGE3_URL:-https://distfiles.gentoo.org/releases/amd64/autobuilds/
 OUT_ISO=${OUT_ISO:-nethix-live-alpha.iso}
 ARTIFACTS_REPO=${ARTIFACTS_REPO:-LoreRealm/nethix-artifacts}
 ARTIFACTS_ASSET=${ARTIFACTS_ASSET:-nethix-installer-binaries.zip}
+KERNEL_PV=${KERNEL_PV:-7.3.6}
 
 say() { printf '\e[1;36m::\e[0m %s\n' "$*"; }
 die() { printf '\e[1;31m!!\e[0m %s\n' "$*" >&2; exit 1; }
@@ -88,6 +89,10 @@ mkdir -p "$WORK/root/etc/portage/package.accept_keywords"
 echo "sys-kernel/nethix-sources ~amd64" \
     > "$WORK/root/etc/portage/package.accept_keywords/nethix.conf"
 
+# Distfiles cache: stage3 root's /var/cache may come out with odd perms
+# (the __portage_test_write__ denial we saw). Ensure portage can write.
+chmod 755 "$WORK/root/var/cache" "$WORK/root/var/cache/distfiles" 2>/dev/null || true
+
 # --- 3. emerge minimal live set (alpha: no Plasma yet)
 say "emerging minimal live set..."
 chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 /bin/bash -c '
@@ -141,16 +146,24 @@ chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 /bin/bash -c '
 
 # --- 6. kernel + initramfs
 say "installing kernel + dracut initramfs..."
-chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 /bin/bash -c '
-    set -e
+
+# The Manifest shipped in the repo is generated from a known-good download;
+# refresh it inside the chroot so checksums always match reality before emerging.
+chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 bash -ec "
+    cd /var/db/repos/nethix/sys-kernel/nethix-sources
+    ebuild nethix-sources-$KERNEL_PV.ebuild manifest || true
+"
+
+chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 /bin/bash -ec "
     emerge --ask=n sys-kernel/nethix-sources
-    KDIR=$(ls -d /usr/src/linux-* | sort -Vr | head -n1)
-    cd "$KDIR"
+    KDIR=\$(ls -d /usr/src/linux-* | sort -Vr | head -n1)
+    echo \"building kernel in \$KDIR\"
+    cd \"\$KDIR\"
     make olddefconfig
-    make -j$(nproc)
+    make -j\$(nproc)
     make modules_install
     INSTALL_PATH=/boot make install
-'
+"
 chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 dracut --force --regenerate-all --hostonly=no \
     || die "dracut failed — initramfs missing"
 
