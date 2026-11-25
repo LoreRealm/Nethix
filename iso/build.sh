@@ -2,7 +2,7 @@
 # build.sh — assemble the Nethix live ISO.
 #
 # Stages:
-#   1. chroot prep (stage3 download, bind mounts, resolv.conf)
+#   1. chroot prep (stage3 download, bind mounts, resolv.conf, locale)
 #   2. overlay + profile injection
 #   3. emerge live set
 #   4. installer binaries — pulled from nethix-artifacts repo (public)
@@ -43,6 +43,15 @@ mkdir -p "$WORK/root"/var/db/repos/{nethix,gentoo} \
          "$WORK/root"/etc/portage/repos.conf \
          "$WORK/root"/var/cache/distfiles
 
+# generate a working locale now so every later step stops whining about
+# en_US.UTF-8 missing (stage3 ships with no locale compiled)
+say "generating en_US.UTF-8 locale in the chroot..."
+chroot "$WORK/root" /bin/bash -c '
+    set -e
+    grep -q "^en_US.UTF-8 UTF-8" /etc/locale.gen || echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
+    locale-gen
+'
+
 mount --bind /proc "$WORK/root/proc"
 mount --bind /sys "$WORK/root/sys"
 mount --rbind /dev "$WORK/root/dev"
@@ -66,10 +75,19 @@ if [[ -f profiles.d/makeconf.amd64-v3 ]]; then
 else
     say "WARN: profiles.d/makeconf.amd64-v3 not found; using stage3 default make.conf"
 fi
+# fail fast on a broken make.conf instead of letting portage spew cryptic
+# "bad substitution" errors halfway through the build
+bash -n "$WORK/root/etc/portage/make.conf" \
+    || die "make.conf has a shell syntax error — fix it before continuing"
+
+# accept ~amd64 for the nethix kernel so emerge doesn't die on keyword mask
+mkdir -p "$WORK/root/etc/portage/package.accept_keywords"
+echo "sys-kernel/nethix-sources ~amd64" \
+    > "$WORK/root/etc/portage/package.accept_keywords/nethix.conf"
 
 # --- 3. emerge minimal live set (alpha: no Plasma yet)
 say "emerging minimal live set..."
-chroot "$WORK/root" /bin/bash -c '
+chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 /bin/bash -c '
     set -e
     emerge-webrsync || emerge --sync || true
     emerge --ask=n --autounmask-write app-misc/fastfetch || true
@@ -85,11 +103,12 @@ if curl -fsSL -o "$WORK/artifacts.zip" \
     || say "WARN: artifacts.zip downloaded but expected binaries not found inside"
 else
     say "WARN: no release asset '$ARTIFACTS_ASSET' in $ARTIFACTS_REPO — ISO will lack the installer"
+    say "WARN: run the publish-binaries workflow (or create the release) and rebuild"
 fi
 
 # --- 5. liveuser
 say "creating liveuser..."
-chroot "$WORK/root" /bin/bash -c '
+chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 /bin/bash -c '
     set -e
     # Gentoo stage3 has no plugdev; use the groups it actually ships
     GROUPS_OK=""
@@ -103,7 +122,7 @@ chroot "$WORK/root" /bin/bash -c '
 
 # --- 6. kernel + initramfs
 say "installing kernel + dracut initramfs..."
-chroot "$WORK/root" /bin/bash -c '
+chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 /bin/bash -c '
     set -e
     emerge --ask=n sys-kernel/nethix-sources
     KDIR=$(ls -d /usr/src/linux-* | sort -Vr | head -n1)
@@ -113,7 +132,7 @@ chroot "$WORK/root" /bin/bash -c '
     make modules_install
     INSTALL_PATH=/boot make install
 '
-chroot "$WORK/root" dracut --force --regenerate-all --hostonly=no \
+chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 dracut --force --regenerate-all --hostonly=no \
     || die "dracut failed — initramfs missing"
 
 # --- 7. squashfs + ISO
