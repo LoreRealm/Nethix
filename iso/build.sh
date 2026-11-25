@@ -4,23 +4,38 @@
 # Stages:
 #   1. chroot prep (stage3 download, bind mounts, resolv.conf, locale)
 #   2. overlay + profile injection
-#   3. emerge live set
+#   3. emerge live set (+ linux-firmware for hardware compatibility)
 #   4. installer binaries — pulled from nethix-artifacts repo (public)
 #   5. liveuser
 #   6. kernel + initramfs (dracut) install to boot/
 #   7. squashfs + xorriso into ISO
 #   8. binhost export — collect built .tbz2 packages for reuse
 #
-# Requirements: ~30 GB free. Run from anywhere — needs root, asks via sudo
-# or pkexec automatically (pkexec survives broken /dev/pty states that
-# break sudo password prompts, e.g. after chroot mount mishaps).
+# Requirements: ~35 GB free (firmware is chunky). Run from anywhere —
+# needs root, relaunches itself via sudo or pkexec (pkexec survives
+# broken /dev/pty states that break sudo password prompts).
 set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$REPO_ROOT"
 
 # self-heal the executable bit (git checkouts from zip/other hosts can lose it)
-chmod +x "$0" 2>/dev/null || true
+chmod +x "$0" iso/charm-bar.sh 2>/dev/null || true
+
+# Themed progress: pass PROGRESS=0 to disable the rune bar.
+PROGRESS=${PROGRESS:-1}
+CHARM_BAR="$REPO_ROOT/iso/charm-bar.sh"
+
+# run_charm LABEL CMD... — wrap a chroot command's stderr in the rune bar
+# when progress is enabled, else run it plainly.
+run_charm() {
+    local label=$1; shift
+    if [[ $PROGRESS -eq 1 && -x $CHARM_BAR ]]; then
+        "$@" 2>&1 | "$CHARM_BAR" "$label"
+    else
+        "$@" 2>&1
+    fi
+}
 
 # Relaunch as root if invoked as a user: prefer sudo, fall back to pkexec
 # (polkit GUI prompt — works even when /dev/pts is broken and sudo can't
@@ -166,19 +181,23 @@ cat > "$WORK/root/etc/portage/package.use/nethix.conf" <<'EOF'
 >=sys-kernel/installkernel-70-r1 dracut
 # dracut is systemd-based on our live image
 sys-kernel/dracut systemd
+# linux-firmware: skip the redistributable-restricted blob splitting; the
+# live image carries everything so hardware Just Works out of the box
+sys-kernel/linux-firmware redistributable
 EOF
 
 # Distfiles cache: stage3 root's /var/cache may come out with odd perms
 # (the __portage_test_write__ denial we saw). Ensure portage can write.
 chmod 755 "$WORK/root/var/cache" "$WORK/root/var/cache/distfiles" 2>/dev/null || true
 
-# --- 3. emerge minimal live set (alpha: no Plasma yet)
-say "emerging minimal live set..."
-chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 /bin/bash -c '
+# --- 3. emerge live set (fastfetch + firmware for hardware compat)
+say "emerging minimal live set + linux-firmware..."
+run_charm "conjuring live set" chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 /bin/bash -c '
     set -e
     emerge-webrsync || emerge --sync || true
-    emerge --autounmask-write app-misc/fastfetch || true
+    emerge --autounmask-write app-misc/fastfetch sys-kernel/linux-firmware
 '
+say "live set installed (firmware adds ~700MB to the squashfs — expected)"
 
 # --- 4. installer binaries from artifacts repo (public)
 say "fetching installer binaries from $ARTIFACTS_REPO (latest release)..."
@@ -233,7 +252,7 @@ chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 bash -ec "
     ebuild nethix-sources-$KERNEL_PV.ebuild manifest || true
 "
 
-chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 /bin/bash -ec "
+run_charm "forging kernel" chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 /bin/bash -ec "
     emerge --autounmask-write --autounmask-continue sys-kernel/nethix-sources
     KDIR=\$(ls -d /usr/src/linux-* | sort -Vr | head -n1)
     echo \"building kernel in \$KDIR\"
