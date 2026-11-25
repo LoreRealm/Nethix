@@ -107,6 +107,17 @@ mkdir -p "$WORK/root/etc/portage/package.accept_keywords"
 echo "sys-kernel/nethix-sources ~amd64" \
     > "$WORK/root/etc/portage/package.accept_keywords/nethix.conf"
 
+# Pre-seed required USE flags so dependencies resolve without manual
+# autounmask intervention. Necessary-for-the-build flags belong here, not
+# in a human's hands at 4am.
+mkdir -p "$WORK/root/etc/portage/package.use"
+cat > "$WORK/root/etc/portage/package.use/nethix.conf" <<'EOF'
+# nethix-sources[initramfs] requires dracut-capable installkernel
+>=sys-kernel/installkernel-70-r1 dracut
+# dracut is systemd-based on our live image
+sys-kernel/dracut systemd
+EOF
+
 # Distfiles cache: stage3 root's /var/cache may come out with odd perms
 # (the __portage_test_write__ denial we saw). Ensure portage can write.
 chmod 755 "$WORK/root/var/cache" "$WORK/root/var/cache/distfiles" 2>/dev/null || true
@@ -173,7 +184,7 @@ chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 bash -ec "
 "
 
 chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 /bin/bash -ec "
-    emerge --ask=n sys-kernel/nethix-sources
+    emerge --ask=n --autounmask-write --autounmask-continue sys-kernel/nethix-sources
     KDIR=\$(ls -d /usr/src/linux-* | sort -Vr | head -n1)
     echo \"building kernel in \$KDIR\"
     cd \"\$KDIR\"
