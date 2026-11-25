@@ -11,6 +11,7 @@ Move done items to the bottom section, don't delete (history matters).
 - [ ] cantrip-update: interactive TUI updater (preview -uDN @world, per-block confirm, binhost-aware, never interrupt emerge mid-transaction)
 - [ ] Rework fetch-cachy-patches.sh: parse CachyOS PKGBUILD source=() array for patch URLs (EEVDF era, no fixed bore patch), pull their `config` as kernel config base
 - [ ] USE flag UI: graphical/interactive interface for viewing/deciding USE flags per package with descriptions and presets (desktop/gaming/minimal) — integrate into Spire or summon
+- [ ] cantrip-import: Arch (or other distro) migration helper — read `pacman -Qqe` list, categorize (identical names / split-meta / system-baselayer skip / AUR), fuzzy-match against Gentoo tree (equery/emerge --searchdesc), emit: (a) world-file atom list, (b) USE flag suggestions, (c) unmatched list for scri/GURU
 - [ ] Nethix fastfetch config: fantasy/pathfinder-themed (ASCII banner, parchment-tone palettes, lore-style labels — e.g. "Party" for users, "Spellbook" for kernel, "Quests" for services)
 - [ ] Implement `cantrip-kernel` (rebuild nethix-sources + reinstall)
 - [ ] Live ISO pipeline: catalyst config or squashfs script, Plasma autostart of summon
