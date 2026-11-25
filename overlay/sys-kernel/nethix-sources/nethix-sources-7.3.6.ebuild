@@ -27,32 +27,30 @@ BDEPEND="
     llvm-core/lld
 "
 
-# CachyOS's shipped config — fetched from the upstream linux-cachyos repo
-# by scripts/fetch-cachy-patches.sh into files/${PV_MAJOR}/config-cachyos.
-# If missing, we fetch it directly at unpack time (it's a plain text file,
-# cheap to download, hash verified via the committed Manifest-snippet after
-# the first run).
-SRC_URI+=" https://raw.githubusercontent.com/CachyOS/linux-cachyos/master/linux-cachyos/config -> config-cachyos-${PV}"
-
-CONFIG_FILE="${WORKDIR}/config-cachyos-${PV}"
-
-# The CachyOS release tarball's top-level directory name is not stable
-# across releases (e.g. 'linux-cachyos-<ver>' vs 'cachyos-<ver>-1'), so we
-# locate it after unpack instead of hardcoding S.
-src_unpack() {
-    default
-    S=$(find "${WORKDIR}" -mindepth 1 -maxdepth 1 -type d ! -name 'config-*' | head -n1)
-    [[ -d ${S} ]] || die "couldn't find unpacked source dir in ${WORKDIR}"
-    export S
-}
+# CachyOS's shipped config — committed to the repo in files/ so the ebuild
+# stays hermetic (design goal: no live-network dependency for inputs we
+# control). files/7.3/config-cachyos is fetched/updated by
+# scripts/fetch-cachy-patches.sh.
+CONFIG_FILE="${FILESDIR}/${PV}/config-cachyos"
 
 pkg_setup() {
     ewarn "Using the CachyOS shipped config (config-cachyos)."
     ewarn "Local customization: emerge with _use_current-style edits via /etc/portage/savedconfig later."
 }
 
+# The CachyOS release tarball's top-level directory name is not stable
+# across releases (e.g. 'linux-cachyos-<ver>' vs 'cachyos-<ver>-1'), so we
+# locate it after unpack instead of hardcoding S.
+src_unpack() {
+    default
+    S=$(find "${WORKDIR}" -mindepth 1 -maxdepth 1 -type d | head -n1)
+    [[ -d ${S} ]] || die "couldn't find unpacked source dir in ${WORKDIR}"
+    export S
+}
+
 src_prepare() {
     default
+    [[ -f ${CONFIG_FILE} ]] || die "config-cachyos missing from FILESDIR — run scripts/fetch-cachy-patches.sh ${PV%%.*}.${PV#*.}"
     # Ship the pinned CachyOS config as the base .config
     cp "${CONFIG_FILE}" "${S}/.config" || die "failed to install config"
     # Match CachyOS's localversion treatment so modules land under
