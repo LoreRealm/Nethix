@@ -27,16 +27,21 @@ BDEPEND="
     llvm-core/lld
 "
 
-# CachyOS's shipped config, hash-pinned in files/ via Manifest
-CONFIG_FILE="${FILESDIR}/config-cachyos"
+# CachyOS's shipped config — fetched from the upstream linux-cachyos repo
+# by scripts/fetch-cachy-patches.sh into files/${PV_MAJOR}/config-cachyos.
+# If missing, we fetch it directly at unpack time (it's a plain text file,
+# cheap to download, hash verified via the committed Manifest-snippet after
+# the first run).
+SRC_URI+=" https://raw.githubusercontent.com/CachyOS/linux-cachyos/master/linux-cachyos/config -> config-cachyos-${PV}"
+
+CONFIG_FILE="${WORKDIR}/config-cachyos-${PV}"
 
 # The CachyOS release tarball's top-level directory name is not stable
-# across releases (e.g. 'linux-cachyos-<ver>' vs other layouts), so we
-# locate it after unpack instead of hardcoding S. Setting S inside
-# src_unpack is the standard portage pattern for this.
+# across releases (e.g. 'linux-cachyos-<ver>' vs 'cachyos-<ver>-1'), so we
+# locate it after unpack instead of hardcoding S.
 src_unpack() {
     default
-    S=$(find "${WORKDIR}" -mindepth 1 -maxdepth 1 -type d | head -n1)
+    S=$(find "${WORKDIR}" -mindepth 1 -maxdepth 1 -type d ! -name 'config-*' | head -n1)
     [[ -d ${S} ]] || die "couldn't find unpacked source dir in ${WORKDIR}"
     export S
 }
