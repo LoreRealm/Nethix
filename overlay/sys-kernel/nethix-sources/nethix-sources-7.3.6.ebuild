@@ -12,7 +12,6 @@ MY_P="linux-${MY_PV}"
 DESCRIPTION="Nethix kernel: CachyOS fork (EEVDF, Cachy Sauce), hermetically hash-pinned"
 HOMEPAGE="https://github.com/CachyOS/linux"
 SRC_URI="https://github.com/CachyOS/linux/releases/download/${MY_PV}/${MY_PV}.tar.gz -> ${MY_P}.tar.gz"
-S="${WORKDIR}/${MY_P}"
 
 LICENSE="GPL-2"
 KEYWORDS="~amd64"
@@ -29,7 +28,18 @@ BDEPEND="
 "
 
 # CachyOS's shipped config, hash-pinned in files/ via Manifest
-CONFIG_FILE="${FILESDIR}/config-cachynos"
+CONFIG_FILE="${FILESDIR}/config-cachyos"
+
+# The CachyOS release tarball's top-level directory name is not stable
+# across releases (e.g. 'linux-cachyos-<ver>' vs other layouts), so we
+# locate it after unpack instead of hardcoding S. Setting S inside
+# src_unpack is the standard portage pattern for this.
+src_unpack() {
+    default
+    S=$(find "${WORKDIR}" -mindepth 1 -maxdepth 1 -type d | head -n1)
+    [[ -d ${S} ]] || die "couldn't find unpacked source dir in ${WORKDIR}"
+    export S
+}
 
 pkg_setup() {
     ewarn "Using the CachyOS shipped config (config-cachyos)."
