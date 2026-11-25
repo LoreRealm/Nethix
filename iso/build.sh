@@ -43,6 +43,18 @@ mkdir -p "$WORK/root"/var/db/repos/{nethix,gentoo} \
          "$WORK/root"/etc/portage/repos.conf \
          "$WORK/root"/var/cache/distfiles
 
+# Bind-mount the virtual filesystems FIRST: locale-gen needs /proc/mounts,
+# portage needs /proc, /sys and /dev for its builds. Everything chrooted
+# below assumes they exist.
+mount --bind /proc "$WORK/root/proc"
+mount --bind /sys  "$WORK/root/sys"
+mount --rbind /dev "$WORK/root/dev"
+cleanup() {
+    umount -R "$WORK/root/dev" 2>/dev/null || true
+    umount "$WORK/root/proc" "$WORK/root/sys" 2>/dev/null || true
+}
+trap cleanup EXIT
+
 # generate a working locale now so every later step stops whining about
 # en_US.UTF-8 missing (stage3 ships with no locale compiled)
 say "generating en_US.UTF-8 locale in the chroot..."
@@ -51,15 +63,6 @@ chroot "$WORK/root" /bin/bash -c '
     grep -q "^en_US.UTF-8 UTF-8" /etc/locale.gen || echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
     locale-gen
 '
-
-mount --bind /proc "$WORK/root/proc"
-mount --bind /sys "$WORK/root/sys"
-mount --rbind /dev "$WORK/root/dev"
-cleanup() {
-    umount -R "$WORK/root/dev" 2>/dev/null || true
-    umount "$WORK/root/proc" "$WORK/root/sys" 2>/dev/null || true
-}
-trap cleanup EXIT
 
 # --- 2. overlay + profile
 say "wiring nethix overlay + profile into the chroot..."
@@ -98,9 +101,25 @@ say "fetching installer binaries from $ARTIFACTS_REPO (latest release)..."
 if curl -fsSL -o "$WORK/artifacts.zip" \
      "https://github.com/$ARTIFACTS_REPO/releases/latest/download/$ARTIFACTS_ASSET"; then
     mkdir -p "$WORK/root/usr/local/bin"
-    unzip -o -j "$WORK/artifacts.zip" \*summon \*summon-exec \*forge \*scri \
-        -d "$WORK/root/usr/local/bin/" \
-    || say "WARN: artifacts.zip downloaded but expected binaries not found inside"
+    if command -v unzip >/dev/null; then
+        unzip -o -j "$WORK/artifacts.zip" -d "$WORK/root/usr/local/bin/" \
+        || say "WARN: artifacts.zip downloaded but expected binaries not found inside"
+    else
+        # no unzip on the host (ubuntu runners don't ship it by default): python3 fallback
+        python3 - "$WORK/artifacts.zip" "$WORK/root/usr/local/bin" <<'PY'
+import os, sys, zipfile
+zf, dest = sys.argv[1], sys.argv[2]
+wanted = ("summon", "summon-exec", "forge", "scri")
+with zipfile.ZipFile(zf) as z:
+    for name in z.namelist():
+        base = name.rstrip("/").rsplit("/", 1)[-1]
+        if base in wanted:
+            out = os.path.join(dest, base)
+            with z.open(name) as src, open(out, "wb") as dst:
+                dst.write(src.read())
+            os.chmod(out, 0o755)
+PY
+    fi
 else
     say "WARN: no release asset '$ARTIFACTS_ASSET' in $ARTIFACTS_REPO — ISO will lack the installer"
     say "WARN: run the publish-binaries workflow (or create the release) and rebuild"
@@ -149,32 +168,39 @@ cp "$KIMG" "$WORK/iso-root/vmlinuz"
 cp "$INITRD" "$WORK/iso-root/initramfs.img"
 
 say "assembling ISO..."
-cat > "$WORK/iso-root/grub-live.cfg" <<'EOF'
+# grub config lives INSIDE the chroot where grub-mkstandalone expects it
+mkdir -p "$WORK/root/boot/grub"
+cat > "$WORK/root/boot/grub/grub.cfg" <<'EOF'
 set timeout=5
 menuentry "Nethix Live" {
     linux /vmlinuz root=live:CDLABEL=NETHIX_LIVE rd.live.image rd.live.squashimg=live.squashfs
     initrd /initramfs.img
 }
 EOF
+cp "$WORK/root/boot/grub/grub.cfg" "$WORK/iso-root/grub-live.cfg"
 
-# Standalone grub images (EFI + BIOS) carrying the live config
 chroot "$WORK/root" grub-mkstandalone \
     -O x86_64-efi -o /tmp/nethix-efi.img \
-    "boot/grub/grub.cfg=$WORK/iso-root/grub-live.cfg" \
+    "boot/grub/grub.cfg=/boot/grub/grub.cfg" \
 || die "grub-mkstandalone EFI failed (is sys-boot/grub emerged in the chroot?)"
 chroot "$WORK/root" grub-mkstandalone \
     -O i386-pc -o /tmp/nethix-bios.img \
-    "boot/grub/grub.cfg=$WORK/iso-root/grub-live.cfg" \
+    "boot/grub/grub.cfg=/boot/grub/grub.cfg" \
 || die "grub-mkstandalone BIOS failed"
 cp "$WORK/root/tmp/nethix-efi.img" "$WORK/iso-root/efi-boot.img"
 cp "$WORK/root/tmp/nethix-bios.img" "$WORK/iso-root/bios-boot.img"
 
 xorriso -as mkisofs -iso-level 3 -volid NETHIX_LIVE \
+    -graft-points \
     -o "$REPO_ROOT/$OUT_ISO" \
     -b bios-boot.img -no-emul-boot \
     --efi-boot efi-boot.img \
-    vmlinuz initramfs.img live.squashfs grub-live.cfg
+    /vmlinuz="$WORK/iso-root/vmlinuz" \
+    /initramfs.img="$WORK/iso-root/initramfs.img" \
+    /live.squashfs="$WORK/iso-root/live.squashfs" \
+    /grub-live.cfg="$WORK/iso-root/grub-live.cfg" \
+    /efi-boot.img="$WORK/iso-root/efi-boot.img" \
+    /bios-boot.img="$WORK/iso-root/bios-boot.img"
 
-die_if_missing() { [[ -f "$REPO_ROOT/$OUT_ISO" ]] || die "ISO output missing"; }
-die_if_missing
+[[ -f "$REPO_ROOT/$OUT_ISO" ]] || die "ISO output missing"
 say "done: $REPO_ROOT/$OUT_ISO"
