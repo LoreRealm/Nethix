@@ -12,6 +12,12 @@ name: iso-build-report
 # The recommendations step pattern-matches known failure modes and prints
 # probable causes + fixes before you even open the log.
 #
+# On SUCCESS, TWO artifacts are uploaded: the ISO itself and the binhost/
+# package set produced during the build (every .tbz2 portage built).
+# The publish-binhost workflow picks the latter up and mirrors it to R2 —
+# also gated on a green preflight for the same SHA, so broken binaries
+# never reach the mirror.
+#
 # RUNNER SELECTION: set the NETHIX_RUNNERS repo variable:
 #   unset      → ubuntu-latest (default: GitHub-hosted, free for public repos)
 #   hosted     → ubuntu-latest (explicit alias)
@@ -110,6 +116,15 @@ jobs:
           name: nethix-live-iso
           path: "*.iso"
           if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload binhost artifact (for R2 mirror)
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nethix-binhost
+          path: binhost/
+          if-no-files-found: warn
           retention-days: 30
 
       - name: Upload log artifact (fallback)
