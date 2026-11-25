@@ -11,7 +11,9 @@
 #   7. squashfs + xorriso into ISO
 #   8. binhost export — collect built .tbz2 packages for reuse
 #
-# Requirements: root, ~30 GB free. Run from anywhere.
+# Requirements: ~30 GB free. Run from anywhere — needs root, asks via sudo
+# or pkexec automatically (pkexec survives broken /dev/pty states that
+# break sudo password prompts, e.g. after chroot mount mishaps).
 set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -19,6 +21,24 @@ cd "$REPO_ROOT"
 
 # self-heal the executable bit (git checkouts from zip/other hosts can lose it)
 chmod +x "$0" 2>/dev/null || true
+
+# Relaunch as root if invoked as a user: prefer sudo, fall back to pkexec
+# (polkit GUI prompt — works even when /dev/pts is broken and sudo can't
+# allocate a pty for its password prompt).
+if [[ $EUID -ne 0 ]]; then
+    if command -v sudo >/dev/null && sudo -n true 2>/dev/null; then
+        exec sudo "$0" "$@"
+    elif command -v pkexec >/dev/null; then
+        exec pkexec env HOME="$HOME" USER="$USER" DISPLAY="${DISPLAY:-}" \
+             WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-}" XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-}" \
+             bash "$0" "$@"
+    elif command -v sudo >/dev/null; then
+        exec sudo "$0" "$@"   # interactive sudo; may fail on broken pty
+    else
+        printf '!! run as root (needs mounts for chroot); no sudo or pkexec found\n' >&2
+        exit 1
+    fi
+fi
 
 WORK="$REPO_ROOT/.iso-build"
 STAGE3_URL=${STAGE3_URL:-https://distfiles.gentoo.org/releases/amd64/autobuilds/current-stage3-amd64-systemd/}
@@ -29,8 +49,6 @@ KERNEL_PV=${KERNEL_PV:-7.3.6}
 
 say() { printf '\e[1;36m::\e[0m %s\n' "$*"; }
 die() { printf '\e[1;31m!!\e[0m %s\n' "$*" >&2; exit 1; }
-
-[[ $EUID -eq 0 ]] || die "run as root (needs mounts for chroot)"
 
 mkdir -p "$WORK"/root
 
