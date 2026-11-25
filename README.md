@@ -32,22 +32,35 @@ Legend: ✅ works · ⚠️ written but unvalidated · 🚧 planned/in-progress
 
 ## Fastfetch
 
-The live ISO ships a themed fastfetch config (in `configs/fastfetch/`), so a fresh boot greets you with system info in Nethix styling. Out of the box it displays the usual Linux fetch fields, themed to match the distro:
+The live ISO ships a themed fastfetch config (in `configs/fastfetch/`), so a fresh boot greets you with system info in Nethix styling. The config uses a tree-branch layout inspired by community fastfetch showcases, organized like a character sheet:
 
 ```
-        uwu@VIctory        OS: Nethix x86_64 (pre-alpha)
-      ┌──────────────┐     Kernel: Linux 7.3.6-cachyos (EEVDF, Cachy Sauce)
-      │   ◢ Nethix   │     Uptime: 3 mins
-      │   ascii art  │     Packages: 412 (portage)
-      │   goes here  │     Shell: bash 5.3
-      └──────────────┘     WM: niri (Wayland)
-                           Terminal: ghostty
-                           CPU: AMD Ryzen 9 7950X (32) @ 4.5GHz
-                           GPU: AMD Radeon RX 7900 XTX
-                           Memory: 2.1 GiB / 32 GiB
+╭─ Hero ─────────────────────────────────────
+├─ OS ────────────── Nethix x86_64 (pre-alpha)
+├─ Kernel ────────── 7.3.6-cachyos (EEVDF)
+├─ Grimoire ──────── 412 scrolls (portage)
+├─ Quest Time ────── 3 hours 20 mins
+╰────────────────────────────────────────────
+
+╭─ Class ────────────────────────────────────
+├─ WM ────────────── niri (Wayland)
+├─ Terminal ──────── ghostty
+╰────────────────────────────────────────────
+
+╭─ Combat Stats ─────────────────────────────
+├─ STR ─ Might ───── Modern AMD CPU (16T)
+├─ DEX ─ Dexterity ━ Dedicated GPU
+├─ CON ─ Constitution 1.5 GiB / 16 GiB
+├─ FORT ─ Stamina ── 2.0 GiB / 8.0 GiB
+├─ Inventory ─────── /dev/nvme0n1p3 (500G)
+╰────────────────────────────────────────────
+
+╭─ Harrow Deck ──────────────────────────────
+│ ● ● ● ● ● ● ● ● ● ● ● ● ● ● ● ●
+╰────────────────────────────────────────────
 ```
 
-The config is a plain `neofetch`-style jsonc — colors, separator, and module list are all standard fastfetch options, so it's trivially portable to a normal fastfetch install:
+(Values above are illustrative placeholders.) The config is a plain jsonc — colors, separators, and module list are all standard fastfetch options, so it's trivially portable to a normal fastfetch install:
 
 ```bash
 fastfetch --config configs/fastfetch/nethix.jsonc
@@ -78,8 +91,10 @@ sudo ./iso/build.sh
 
 ## CI
 
+- `portage-preflight` — resolve-checks the full ISO package set in a stage3 container on every push and daily; self-heals config drift and gates the ISO build on green
+- `iso-build-report` — full ISO build (dispatch + weekly cron), only runs when preflight is green for the exact commit
 - `build-installer` — tests + builds all crates on push, publishes binaries to nethix-artifacts
-- `ci-watchdog` — hourly build; files an issue on failure (permissions: issues: write)
+- `ci-watchdog` — hourly build; files a deduplicated issue on failure, auto-closes on recovery
 - `build-binhost` — nightly binhost attempt in a stage3 container
 - Dependabot — weekly cargo + actions updates
 
