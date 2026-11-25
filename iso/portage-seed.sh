@@ -7,11 +7,18 @@
 # can never drift — a mask failure caught in CI is guaranteed fixed
 # locally too, and vice versa.
 #
-# Usage: portage-seed.sh TARGET_ROOT JOBS
+# Usage: portage-seed.sh TARGET_ROOT JOBS [BINHOST_DIR]
+#   BINHOST_DIR (optional): path to a directory of previously built
+#   .tbz2 packages + Packages index (the binhost/ output of a previous
+#   iso/build.sh run). When provided, portage installs from these
+#   instead of recompiling — LLVM/clang/kernel toolchain that took 40+
+#   minutes to compile land as prebuilts in seconds. Portage falls back
+#   to source compilation for anything missing or mismatched.
 set -euo pipefail
 
-ROOT=${1:?usage: portage-seed.sh TARGET_ROOT JOBS}
+ROOT=${1:?usage: portage-seed.sh TARGET_ROOT JOBS [BINHOST_DIR]}
 JOBS=${2:-$(nproc)}
+BINHOST_DIR=${3:-}
 
 LICENSE_POLICY="* -@EULA"   # all licenses accepted incl. redistributable; EULAs still explicit
 KEYWORD_POLICY="*/* ~amd64" # whole-tree testing keywords (distro pins ~amd64 by design)
@@ -19,6 +26,7 @@ KEYWORD_POLICY="*/* ~amd64" # whole-tree testing keywords (distro pins ~amd64 by
 mkdir -p "$ROOT"/etc/portage/{package.accept_keywords,package.use,package.license,repos.conf}
 
 # --- make.conf additions (appended; caller owns the base make.conf) ---
+{
 cat >> "$ROOT/etc/portage/make.conf" <<EOF
 
 # --- injected by portage-seed.sh (shared by iso/build.sh and CI preflight) ---
@@ -27,6 +35,24 @@ MAKEOPTS="-j$JOBS -l$JOBS"
 EMERGE_DEFAULT_OPTS="--quiet-build=y --quiet-fail=y --verbose=n --ask=n"
 FEATURES="buildpkg binpkg-multi-instance"
 EOF
+
+# --- binhost reuse: point portage at previously built packages ---
+if [[ -n "$BINHOST_DIR" && -d "$BINHOST_DIR" ]]; then
+    cat >> "$ROOT/etc/portage/make.conf" <<EOF
+
+# --- binhost reuse (seeded from $BINHOST_DIR) ---
+# Reuse packages from a previous build instead of recompiling; portage
+# still verifies USE/ABI compatibility and falls back to source builds
+# for mismatches.
+PORTAGE_BINHOST="$BINHOST_DIR"
+FEATURES="\${FEATURES} getbinpkg"
+EMERGE_DEFAULT_OPTS="\${EMERGE_DEFAULT_OPTS} --usepkg --binpkg-respect-use=y"
+EOF
+    echo ":: binhost reuse enabled from $BINHOST_DIR"
+else
+    echo ":: no binhost dir provided (or missing) — full source build"
+fi
+}
 
 # --- keywords ---
 cat > "$ROOT/etc/portage/package.accept_keywords/nethix.conf" <<'EOF'
