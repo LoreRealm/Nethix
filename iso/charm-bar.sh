@@ -9,6 +9,10 @@
 # Usage:
 #   emerge ... 2>&1 | charm-bar.sh "phase label"
 #
+# NOTE: not currently used by iso/build.sh (PROGRESS/CHARM off by default);
+# reserved for the user-facing install flow (summon) where pretty output
+# earns its keep. Keep this file syntax-clean and tested for that day.
+#
 # Threading: reads line-by-line, so it can be inserted anywhere in a pipe.
 # Percentages come from portage's own ">>> Emerging (N of M)" counters and
 # the per-package "[ NN%]" build-progress tokens portage emits when not
@@ -37,18 +41,18 @@ pct=0
 overall=0
 
 render() {
-    # $1 = overall percent 0..100
+    # $1 = overall percent 0..100, $2 = intra-package percent (optional)
     local pct_over=$1
     if (( total > 0 )); then
-        # combine package progress with per-package pct when known:
-        # fraction = (cur-1 + pct/100)/total, clamped
-        local frac
+        # fraction = (cur-1 + intra/100)/total, clamped to 0..100
+        local frac intra
         frac=$(( cur - 1 ))
         (( frac < 0 )) && frac=0
-        # add intra-package progress if we track it (passed via $2)
-        local intra=${2:-0}
+        intra=${2:-0}
         overall=$(( (frac * 100 + intra) / total ))
         (( overall > 100 )) && overall=100
+    else
+        overall=$pct_over
     fi
 
     local filled=$(( overall * BAR_WIDTH / 100 ))
@@ -63,8 +67,8 @@ render() {
     done
 
     if (( overall >= 100 )); then
-        printf '\r[%s] %s %s %s %3d%% %-*s\r\n' \
-            "$out" "$FLAME_ACTIVE" "$LABEL" "complete!" "$overall" 0 "" >&2
+        printf '\r[%s] %s %s %s %3d%%\n' \
+            "$out" "$FLAME_ACTIVE" "$LABEL" "complete!" "$overall" >&2
     elif (( IS_TTY )); then
         printf '\r[%s] %s %s%s %3d%%' \
             "$out" "$FLAME_ACTIVE" "$LABEL" "$pkg" "$overall" >&2
@@ -81,17 +85,22 @@ while IFS= read -r line; do
         cur=${BASH_REMATCH[1]}
         total=${BASH_REMATCH[2]}
         pkg=""
-        # try to grab package atom from same line: ::gentoo / ::nethix suffix
-        if [[ $line =~ (Emerging\ \([0-9]+\ of\ [0-9]+\)\ [^[:space:]]+) ]]; then
-            pkg=" ${BASH_REMATCH[1]#Emerging (*of *)}"
+        # package atom: token after the closing paren, minus repo suffix
+        if [[ $line =~ Emerging\ \([0-9]+\ of\ [0-9]+\)\ ([^[:space:]]+) ]]; then
+            pkg=" ${BASH_REMATCH[1]%::*}"
         fi
         render 0
     elif [[ $line =~ \[\ *([0-9]+)%\ *\] ]]; then
         pct=${BASH_REMATCH[1]}
         render "$pct" "$pct"
-    elif [[ $line =~ >>>\ (Installing|Completed|Merging)\ \(([0-9]+)\ of\ ([0-9]+)\) ]]; then
-        cur=${BASH_REMATCH[2]}
-        total=${BASH_REMATCH[3]}
+    elif [[ $line == ">>>"*"Installing"*"("*" of "*" )"* || $line == ">>>"*"Completed"*"("*" of "*" )"* || $line == ">>>"*"Merging"*"("*" of "*" )"* ]]; then
+        # e.g. ">>> Installing (2 of 14) app-misc/foo-1.2::gentoo"
+        if [[ $line == *"("*" of "*)* ]]; then
+            cur=${line##*(}
+            cur=${cur%% of*}
+            total=${line##* of }
+            total=${total%%)*}
+        fi
         render 100
     fi
 done
