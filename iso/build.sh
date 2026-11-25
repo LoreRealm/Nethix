@@ -234,7 +234,12 @@ run_charm "forging kernel" chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US
 # initramfs: kernel-build + installkernel[dracut] should have generated it
 # already; regenerate all as a belt-and-braces measure so /boot always has
 # an initramfs matching the installed kernel even if the USE plumbing lags.
-chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 dracut --force --regenerate-all --hostonly=no \
+# dracut >= 111 dropped the "--hostonly=no" value form: the flag is either
+# bare (--hostonly) or negated (--no-hostonly). Old-style --hostonly=no
+# made getopt bail with "option doesn't allow an argument" and killed the
+# build at the last step.
+chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 \
+    dracut --force --regenerate-all --no-hostonly \
     || die "dracut failed — initramfs missing"
 
 # --- 7. squashfs + ISO
