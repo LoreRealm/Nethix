@@ -20,6 +20,10 @@ name: portage-preflight
 # silently. Issues are deduplicated by title so repeated failures
 # update context instead of spamming new issues.
 #
+# AUTO-BUILD: a GREEN preflight queues the full ISO build
+# (iso-build-report workflow) — resolve-verified commits go straight
+# to a build without anyone clicking anything.
+#
 # Runs on push to main and daily (portage tree drifts — yesterday's
 # clean resolve can break on tomorrow's snapshot).
 on:
@@ -32,6 +36,7 @@ on:
 permissions:
   contents: write
   issues: write
+  actions: write
 
 jobs:
   preflight:
@@ -61,13 +66,32 @@ jobs:
       - name: Resolve nethix-sources (Manifest will refresh at real build)
         run: emerge --pretend --columns sys-kernel/nethix-sources
 
+      # On GREEN: queue the full ISO build (which publishes logs to
+      # paste.rs + uploads the ISO artifact on success).
+      - name: Queue ISO build (green preflight)
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          # avoid build storms: only auto-queue on push events and the
+          # daily cron, not on manual dispatch (human chose preflight only)
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "manual dispatch — skipping auto-build; trigger iso-build-report yourself if wanted"
+            exit 0
+          fi
+          echo "preflight green — queueing iso-build-report build"
+          gh workflow run iso-build-report.yml --repo "$REPO" \
+            && echo "ISO build queued" \
+            || echo "::warning::failed to queue iso-build-report (check workflow file name)"
+
       - name: Capture resolve failure details
         if: failure()
         run: |
           # run the pretend again, capturing output for the issue/report
           {
             emerge --pretend --columns app-misc/fastfetch sys-kernel/linux-firmware
-            emerge --pretend --columns '>=sys-kernel/installkernel-70-r1[dracut]' sys-kernel/dracut[systemd]
+            emerge --pretend --columns '>=sys-kernel/installkernel-70-r1[dracut]' sys-kernel/dracut[systemd]'
             emerge --pretend --columns sys-kernel/nethix-sources
           } > /tmp/resolve-fail.log 2>&1 || true
           # publish for the issue / later analysis (scrubbed, best-effort)
@@ -84,7 +108,7 @@ jobs:
           # --autounmask-write records them into /etc/portage/package.*
           emerge --autounmask-write --autounmask-keep-going=y \
               app-misc/fastfetch sys-kernel/linux-firmware \
-              '>=sys-kernel/installkernel-70-r1[dracut]' sys-kernel/dracut[systemd] \
+              '>=sys-kernel/installkernel-70-r1[dracut]' sys-kernel/dracut[systemd]' \
               sys-kernel/nethix-sources || true
 
           # Collect the changes portage recorded
