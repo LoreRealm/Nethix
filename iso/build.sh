@@ -16,6 +16,9 @@ set -euo pipefail
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$REPO_ROOT"
 
+# self-heal the executable bit (git checkouts from zip/other hosts can lose it)
+chmod +x "$0" 2>/dev/null || true
+
 WORK="$REPO_ROOT/.iso-build"
 STAGE3_URL=${STAGE3_URL:-https://distfiles.gentoo.org/releases/amd64/autobuilds/current-stage3-amd64-systemd/}
 OUT_ISO=${OUT_ISO:-nethix-live-alpha.iso}
@@ -29,6 +32,26 @@ die() { printf '\e[1;31m!!\e[0m %s\n' "$*" >&2; exit 1; }
 [[ $EUID -eq 0 ]] || die "run as root (needs mounts for chroot)"
 
 mkdir -p "$WORK"/root
+
+# Peel any stale mounts left by a previous crashed/killed build, deepest-first.
+# Lazy+loop because stacked rbinds (dev/pts under dev) resist a single -R pass.
+cleanup_mounts() {
+    local tries=0 m
+    while grep -q " $WORK/root" /proc/mounts; do
+        while read -r m; do
+            umount -l "$m" 2>/dev/null || true
+        done < <(grep " $WORK/root" /proc/mounts | awk '{print $2}' | sort -r)
+        tries=$((tries + 1))
+        [[ $tries -gt 10 ]] && { say "WARN: mounts still present under $WORK/root:"; grep " $WORK/root" /proc/mounts; return 1; }
+    done
+    return 0
+}
+trap cleanup_mounts EXIT
+
+if grep -q " $WORK/root" /proc/mounts; then
+    say "cleaning stale mounts from a previous build..."
+    cleanup_mounts || die "could not clear stale mounts — check 'grep iso-build /proc/mounts'"
+fi
 
 # --- 1. stage3
 say "fetching latest stage3 tarball..."
@@ -50,11 +73,6 @@ mkdir -p "$WORK/root"/var/db/repos/{nethix,gentoo} \
 mount --bind /proc "$WORK/root/proc"
 mount --bind /sys  "$WORK/root/sys"
 mount --rbind /dev "$WORK/root/dev"
-cleanup() {
-    umount -R "$WORK/root/dev" 2>/dev/null || true
-    umount "$WORK/root/proc" "$WORK/root/sys" 2>/dev/null || true
-}
-trap cleanup EXIT
 
 # generate a working locale now so every later step stops whining about
 # en_US.UTF-8 missing (stage3 ships with no locale compiled)
