@@ -1,4 +1,5 @@
 COMMON_FLAGS="-march=x86-64-v3 -O2 -pipe"
 CFLAGS="${COMMON_FLAGS}"
 CXXFLAGS="${COMMON_FLAGS}"
-MAKEOPTS="-j$(nproc)"
+# NOTE: no $(...) command substitution here — portage's make.conf parser
+# rejects it. MAKEOPTS deliberately unset: portage auto-detects core count.
