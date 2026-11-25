@@ -61,7 +61,7 @@ jobs:
         run: emerge --pretend --columns app-misc/fastfetch sys-kernel/linux-firmware
 
       - name: Resolve kernel toolchain (installkernel + dracut)
-        run: emerge --pretend --columns '>=sys-kernel/installkernel-70-r1[dracut]' sys-kernel/dracut[systemd]
+        run: emerge --pretend --columns '>=sys-kernel/installkernel-70-r1[dracut]' 'sys-kernel/dracut[systemd]'
 
       - name: Resolve nethix-sources (Manifest will refresh at real build)
         run: emerge --pretend --columns sys-kernel/nethix-sources
@@ -91,7 +91,7 @@ jobs:
           # run the pretend again, capturing output for the issue/report
           {
             emerge --pretend --columns app-misc/fastfetch sys-kernel/linux-firmware
-            emerge --pretend --columns '>=sys-kernel/installkernel-70-r1[dracut]' sys-kernel/dracut[systemd]'
+            emerge --pretend --columns '>=sys-kernel/installkernel-70-r1[dracut]' 'sys-kernel/dracut[systemd]'
             emerge --pretend --columns sys-kernel/nethix-sources
           } > /tmp/resolve-fail.log 2>&1 || true
           # publish for the issue / later analysis (scrubbed, best-effort)
@@ -108,7 +108,7 @@ jobs:
           # --autounmask-write records them into /etc/portage/package.*
           emerge --autounmask-write --autounmask-keep-going=y \
               app-misc/fastfetch sys-kernel/linux-firmware \
-              '>=sys-kernel/installkernel-70-r1[dracut]' sys-kernel/dracut[systemd]' \
+              '>=sys-kernel/installkernel-70-r1[dracut]' 'sys-kernel/dracut[systemd]' \
               sys-kernel/nethix-sources || true
 
           # Collect the changes portage recorded
