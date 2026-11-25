@@ -1,6 +1,11 @@
 name: iso-build-report
 # Full ISO build with automatic log publishing + failure recommendations.
 #
+# GATE: only builds when the portage-preflight workflow has a GREEN
+# conclusion for the exact commit being built. Manual dispatch still
+# honors the gate — a failed/unrun preflight on this SHA blocks the
+# build (override by running the preflight first, which is cheap).
+#
 # On completion the build log is posted to paste.rs and the URL lands in
 # the run summary, so any agent (Lumo, a watchdog, a human on a phone)
 # can fetch plain-text logs without GitHub auth/API gymnastics.
@@ -12,7 +17,8 @@ name: iso-build-report
 # minutes, one ISO build ≈ 360 hosted minutes = 18% of the monthly free
 # tier). Flip with the NETHIX_RUNNERS repo variable when budget allows:
 #   unset  → self-hosted
-#   hosted → ubuntu-latest
+#   hosted → ubuntu-latest (mandatory mode on a public repo — never point
+#            self-hosted runners at a public repository)
 #
 # Manual dispatch (heavy job), plus weekly so drift gets caught.
 on:
@@ -22,13 +28,40 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 env:
   LOG: /tmp/iso-build.log
   PASTE_URL: ''
 
 jobs:
+  preflight-gate:
+    # Cheap job on hosted infra regardless of NETHIX_RUNNERS: it must not
+    # depend on a possibly-absent self-hosted runner to even evaluate.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      proceed: ${{ steps.gate.outputs.proceed }}
+    steps:
+      - name: Check preflight status for this commit
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          CONCLUSION=$(gh api \
+            "repos/${{ github.repository }}/actions/workflows/portage-preflight.yml/runs?head_sha=${{ github.sha }}&status=success&per_page=1" \
+            --jq '.total_count')
+          if [[ "$CONCLUSION" -gt 0 ]]; then
+            echo "preflight green for ${{ github.sha }} — proceeding"
+            echo "proceed=true"  >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::portage-preflight is not green for commit ${{ github.sha }} — ISO build blocked. Run the preflight first."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: preflight-gate
+    if: needs.preflight-gate.outputs.proceed == 'true'
     runs-on: ${{ vars.NETHIX_RUNNERS == '' && 'self-hosted' || vars.NETHIX_RUNNERS }}
     timeout-minutes: 360
     container:
