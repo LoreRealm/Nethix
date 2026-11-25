@@ -22,15 +22,18 @@ cd "$REPO_ROOT"
 # self-heal the executable bit (git checkouts from zip/other hosts can lose it)
 chmod +x "$0" iso/charm-bar.sh 2>/dev/null || true
 
-# Themed progress: pass PROGRESS=0 to disable the rune bar.
-PROGRESS=${PROGRESS:-1}
+# Progress output: SIMPLE by default — portage's own stage banners, package
+# names and errors, nothing else. The rune charm-bar (iso/charm-bar.sh) is
+# OFF for ISO creation; it's reserved for the user-facing install flow
+# (summon). Opt in with CHARM=1 if you want it here anyway.
+CHARM=${CHARM:-0}
 CHARM_BAR="$REPO_ROOT/iso/charm-bar.sh"
 
-# run_charm LABEL CMD... — wrap a chroot command's stderr in the rune bar
-# when progress is enabled, else run it plainly.
+# run_charm LABEL CMD... — wrap a chroot command's output in the rune bar
+# when CHARM is enabled, else pass output through untouched.
 run_charm() {
     local label=$1; shift
-    if [[ $PROGRESS -eq 1 && -x $CHARM_BAR ]]; then
+    if [[ $CHARM -eq 1 && -x $CHARM_BAR ]]; then
         "$@" 2>&1 | "$CHARM_BAR" "$label"
     else
         "$@" 2>&1
@@ -59,7 +62,7 @@ WORK="$REPO_ROOT/.iso-build"
 STAGE3_URL=${STAGE3_URL:-https://distfiles.gentoo.org/releases/amd64/autobuilds/current-stage3-amd64-systemd/}
 OUT_ISO=${OUT_ISO:-nethix-live-alpha.iso}
 ARTIFACTS_REPO=${ARTIFACTS_REPO:-LoreRealm/nethix-artifacts}
-ARTIFACTS_ASSET=${ARTIFACTS_ASSET:-nethix-installer-binaries.zip}
+ARTIFACTS_ASSET={ARTIFACTS_ASSET:-nethix-installer-binaries.zip}
 KERNEL_PV=${KERNEL_PV:-7.3.6}
 
 say() { printf '\e[1;36m::\e[0m %s\n' "$*"; }
