@@ -14,6 +14,12 @@ name: portage-preflight
 # the one place both local builds and CI read, then the preflight
 # re-runs on the new commit and should go green.
 #
+# ESCALATION: if self-heal can't fix it (push rejected, failure isn't
+# a config problem), a GitHub issue is opened automatically with the
+# portage error, fix attempts, and a log paste URL — nothing fails
+# silently. Issues are deduplicated by title so repeated failures
+# update context instead of spamming new issues.
+#
 # Runs on push to main and daily (portage tree drifts — yesterday's
 # clean resolve can break on tomorrow's snapshot).
 on:
@@ -25,6 +31,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   preflight:
@@ -54,6 +61,21 @@ jobs:
       - name: Resolve nethix-sources (Manifest will refresh at real build)
         run: emerge --pretend --columns sys-kernel/nethix-sources
 
+      - name: Capture resolve failure details
+        if: failure()
+        run: |
+          # run the pretend again, capturing output for the issue/report
+          {
+            emerge --pretend --columns app-misc/fastfetch sys-kernel/linux-firmware
+            emerge --pretend --columns '>=sys-kernel/installkernel-70-r1[dracut]' sys-kernel/dracut[systemd]
+            emerge --pretend --columns sys-kernel/nethix-sources
+          } > /tmp/resolve-fail.log 2>&1 || true
+          # publish for the issue / later analysis (scrubbed, best-effort)
+          sed -E 's/(chpasswd|password|PASS)=.*/\1=[scrubbed]/g' /tmp/resolve-fail.log > /tmp/resolve-fail.clean || true
+          URL=$(curl -sf --max-time 60 --data-binary @/tmp/resolve-fail.clean https://paste.rs/) || URL="(paste.rs unreachable — log attached as step output above)"
+          echo "FAIL_LOG_URL=$URL" >> "$GITHUB_ENV"
+          tail -100 /tmp/resolve-fail.log || true   # also visible in the step log
+
       - name: Self-heal: resolve required config changes and commit them
         if: failure()
         run: |
@@ -70,10 +92,8 @@ jobs:
           echo "portage recorded changes in: $CHANGES"
 
           # Fold them into iso/portage-seed.sh so local + CI both pick them up.
-          # The autounmask entries land as "# required by ..." commented blocks;
-          # append them verbatim to the corresponding sections of the seeder.
           python3 - <<'PY'
-          import os, re, subprocess
+          import os
           seed = "iso/portage-seed.sh"
           buckets = {
               "package.use":        [], "package.accept_keywords": [],
@@ -92,16 +112,16 @@ jobs:
                               buckets[base].append(s)
 
           with open(seed) as f: src = f.read()
-          # insert new entries just before each section's EOF marker
+          markers = {
+              "package.use":             "# --- USE flags ---",
+              "package.accept_keywords": "# --- keywords ---",
+              "package.license":         "# --- licenses ---",
+              "package.mask":            "# --- masks ---",
+          }
           for base, entries in buckets.items():
               if not entries: continue
-              marker = {
-                  "package.use": "# --- USE flags ---",
-                  "package.accept_keywords": "# --- keywords ---",
-                  "package.license": "# --- licenses ---",
-                  "package.mask": "# --- masks ---",
-              }[base]
               block = "\n# appended by portage-preflight self-heal\n" + "\n".join(entries) + "\n"
+              marker = markers[base]
               if marker in src:
                   src = src.replace(marker, block + marker)
           with open(seed, "w") as f: f.write(src)
@@ -109,11 +129,65 @@ jobs:
           PY
 
           git config user.name  "nethix-preflight-bot"
-          git config user.email "noreply@github.com"
+          git config user.email "22435766+LoreRealm@users.noreply.github.com"
           git add iso/portage-seed.sh
           if git diff --cached --quiet; then
-            echo "portage found no config changes to commit — failure was something else, check the log"
+            echo "SELF_HEAL_STATUS=no-changes" >> "$GITHUB_ENV"
+            echo "portage found no config changes to commit — failure was something else"
             exit 1
           fi
-          git commit -m "preflight: auto-accept required USE/keywords/licenses from portage autounmask"
-          git push origin main
+          if ! git push origin main; then
+            echo "SELF_HEAL_STATUS=push-rejected" >> "$GITHUB_ENV"
+            echo "bot push rejected — escalating to an issue"
+            exit 1
+          fi
+          echo "SELF_HEAL_STATUS=fixed" >> "$GITHUB_ENV"
+          echo "self-heal committed a fix; the triggered preflight run on the new commit will verify"
+
+      # Runs after self-heal fails (or was skipped due to earlier failure).
+      # Opens/reopens a deduplicated issue with full context.
+      - name: Escalate: open GitHub issue with failure details
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FAIL_LOG_URL: ${{ env.FAIL_LOG_URL }}
+          SELF_HEAL: ${{ env.SELF_HEAL_STATUS }}
+        run: |
+          TITLE="preflight failed: portage cannot resolve the ISO package set"
+          # dedupe: search for an existing OPEN issue with the same title
+          EXISTING=$(gh issue list --repo "$REPO" --state open --search "$TITLE" --json number --jq '.[0].number' || true)
+          BODY=$(cat <<EOF
+          ## Portage preflight failure
+
+          **Run:** $RUN_URL
+          **Trigger:** ${{ github.event_name }}
+          **Self-heal status:** ${SELF_HEAL:-not-reached}
+          **Resolve log:** $FAIL_LOG_URL
+
+          ### Requirements
+          - [ ] Read the resolve log / run output and identify the failing package(s)
+          - [ ] If a required USE flag / keyword / license / mask: add to \`iso/portage-seed.sh\` (single source of truth) and let the preflight re-run verify
+          - [ ] If ebuild-side: fix the ebuild in \`overlay/\`
+          - [ ] Close this issue once the preflight on main is green
+          EOF
+          )
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$REPO" --body "Failure reoccurred (${SELF_HEAL:-not-reached}). $BODY"
+            echo "commented on existing issue #$EXISTING"
+          else
+            gh issue create --repo "$REPO" --title "$TITLE" --body "$BODY" --label ci
+            echo "opened new issue"
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          if [[ "${SELF_HEAL_STATUS:-}" == "fixed" ]]; then
+            echo "### Preflight self-healed"  >> "$GITHUB_STEP_SUMMARY"
+            echo "Required config changes were auto-committed; the preflight run triggered by that commit verifies the fix." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Preflight complete" >> "$GITHUB_STEP_SUMMARY"
+            echo "portage resolves the full ISO package set against today's tree" >> "$GITHUB_STEP_SUMMARY"
+          fi
