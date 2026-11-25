@@ -7,18 +7,18 @@ name: portage-preflight
 # package the ISO builds. Any keyword/license/USE/mask conflict shows
 # up here in minutes instead of 10+ minutes into a local build.
 #
-# SELF-HEALING: on a failed resolve, runs emerge --autounmask-write,
-# extracts the exact required config changes, and COMMITS them back to
-# iso/portage-seed.sh via a bot push — so required USE flags, keywords,
-# licenses and masks are accounted for automatically. The fix lands in
-# the one place both local builds and CI read, then the preflight
-# re-runs on the new commit and should go green.
+# SELF-HEALING: on a failed resolve, re-runs emerge with autounmask
+# and captures the REQUIREMENTS REPORT it prints to stderr/stdout —
+# the exact lines portage itself recommends (USE changes, keyword
+# changes, license changes, masks). Those, and ONLY those, get folded
+# into iso/portage-seed.sh via a bot push. Never re-commits entries
+# the seeder already provides; never rewrites on a no-op.
 #
-# ESCALATION: if self-heal can't fix it (push rejected, failure isn't
-# a config problem), a GitHub issue is opened automatically with the
-# portage error, fix attempts, and a log paste URL — nothing fails
-# silently. Issues are deduplicated by title so repeated failures
-# update context instead of spamming new issues.
+# ESCALATION: if self-heal can't fix it (no required changes found,
+# push rejected, failure isn't a config problem), a GitHub issue is
+# opened automatically with the portage error and log paste URL —
+# nothing fails silently. Issues dedup by title: repeats comment on
+# the existing issue instead of spamming new ones.
 #
 # AUTO-BUILD: a GREEN preflight queues the full ISO build
 # (iso-build-report workflow) — resolve-verified commits go straight
@@ -28,7 +28,7 @@ name: portage-preflight
 # (Settings → Secrets and variables → Actions → Variables):
 #   unset      → ubuntu-latest (default: GitHub-hosted, free for public repos)
 #   hosted     → ubuntu-latest (explicit alias for the same)
-#   label list → e.g. "self-hosted nethix" → your own runner (private repo, $0)
+#   label list → e.g. "self-hosted nethix" → your own runner
 #
 # Runs on push to main and daily (portage tree drifts — yesterday's
 # clean resolve can break on tomorrow's snapshot).
@@ -106,64 +106,111 @@ jobs:
           echo "FAIL_LOG_URL=$URL" >> "$GITHUB_ENV"
           tail -100 /tmp/resolve-fail.log || true   # also visible in the step log
 
-      - name: Self-heal: resolve required config changes and commit them
+      - name: Self-heal: autounmask requirements, committed to the seeder
         if: failure()
         run: |
           set -x
-          # Ask portage itself what config changes are required.
-          # --autounmask-write records them into /etc/portage/package.*
-          emerge --autounmask-write --autounmask-keep-going=y \
-              app-misc/fastfetch sys-kernel/linux-firmware \
-              '>=sys-kernel/installkernel-70-r1[dracut]' 'sys-kernel/dracut[systemd]' \
-              sys-kernel/nethix-sources || true
+          # Re-run the failing resolves with autounmask. Portage PRINTS its
+          # suggested config changes in the output (lines like:
+          #   "The following USE changes are necessary to proceed:")
+          # followed by the exact package entries). Capture that report —
+          # it is the ONLY source of what to change. We do NOT use the
+          # written /etc/portage/package.* files, because the seeder
+          # legitimately populates those and mtime-diffing them re-commits
+          # entries we already ship.
+          {
+            emerge --autounmask --autounmask-keep-going=y --pretend \
+                app-misc/fastfetch sys-kernel/linux-firmware \
+                '>=sys-kernel/installkernel-70-r1[dracut]' 'sys-kernel/dracut[systemd]' \
+                sys-kernel/nethix-sources
+          } > /tmp/autounmask.log 2>&1 || true
 
-          # Collect the changes portage recorded
-          CHANGES=$(find /etc/portage/package.* -newer /etc/portage/repos.conf -type f 2>/dev/null)
-          echo "portage recorded changes in: $CHANGES"
-
-          # Fold them into iso/portage-seed.sh so local + CI both pick them up.
+          # Fold ONLY portage's recommended lines into the seeder, bucketed
+          # by which kind of change they are. Skip anything the seeder
+          # already contains (no duplicate-block churn).
           python3 - <<'PY'
-          import os
-          seed = "iso/portage-seed.sh"
-          buckets = {
-              "package.use":        [], "package.accept_keywords": [],
-              "package.license":    [], "package.mask":         [],
-          }
-          for base in buckets:
-              p = f"/etc/portage/{base}"
-              if not os.path.isdir(p): continue
-              for fname in os.listdir(p):
-                  fpath = os.path.join(p, fname)
-                  text = open(fpath).read()
-                  for line in text.splitlines():
-                      s = line.strip()
-                      if s and not s.startswith("#") and "autounmask-generated" not in s:
-                          if s not in buckets[base]:
-                              buckets[base].append(s)
+          import re
 
-          with open(seed) as f: src = f.read()
-          markers = {
-              "package.use":             "# --- USE flags ---",
-              "package.accept_keywords": "# --- keywords ---",
-              "package.license":         "# --- licenses ---",
-              "package.mask":            "# --- masks ---",
+          seed_path = "iso/portage-seed.sh"
+          with open(seed_path) as f:
+              src = f.read()
+
+          # Parse portage's requirement report. Sections look like:
+          #   The following USE changes are necessary to proceed:
+          #      # ... (optional comment)
+          #      >=cat/pkg-1.2 foo -bar
+          SECTION_RE = re.compile(
+              r"^The following (\S+) changes? (?:are|is) (?:necessary|required)", re.M)
+          SECTIONS = {
+              "USE":            "# --- USE flags ---",
+              "keyword":        "# --- keywords ---",
+              "license":        "# --- licenses ---",
+              "mask":           "# --- masks ---",
+              "unmask":         "# --- masks ---",
+              "uninstall":      None,
           }
-          for base, entries in buckets.items():
-              if not entries: continue
-              block = "\n# appended by portage-preflight self-heal\n" + "\n".join(entries) + "\n"
-              marker = markers[base]
-              if marker in src:
-                  src = src.replace(marker, block + marker)
-          with open(seed, "w") as f: f.write(src)
-          print("seeder updated with:", {k: v for k, v in buckets.items() if v})
+
+          with open("/tmp/autounmask.log") as f:
+              log = f.read()
+
+          # split log into section chunks
+          chunks = []
+          starts = [(m.start(), m.group(1)) for m in SECTION_RE.finditer(log)]
+          for i, (pos, kind) in enumerate(starts):
+              end = starts[i + 1][0] if i + 1 < len(starts) else len(log)
+               # each chunk: lines after the header that look like package atoms
+              block = []
+              for line in log[pos:end].splitlines()[1:]:
+                  s = line.strip()
+                  if not s:
+                      continue
+                  # package lines: start with >=, <=, =, ~, or category/name;
+                  # comments start with '#' — keep them indented as-is
+                  if s.startswith("#"):
+                      continue
+                  if re.match(r"^[<>=~]?[<>=]?[\w+][\w+.-]*/", s) or re.match(r"^[<>=~]", s):
+                      block.append(s)
+              chunks.append((kind, block))
+
+          added_any = False
+          for kind, entries in chunks:
+              if not entries:
+                  continue
+              # normalize kind word ("USE changes" header says "USE changes are")
+              marker = SECTIONS.get(kind.lower().replace("changes", "").strip(), None) or SECTIONS.get(kind, None)
+              if marker is None or marker not in src:
+                  print(f"no marker for section kind={kind!r} — skipping (entries would be lost)")
+                  continue
+              new_lines = "\n".join(entries)
+              block_txt = "\n# appended by portage-preflight self-heal\n" + new_lines + "\n"
+              # skip if all entries already present in seeder
+              if all(e in src for e in entries):
+                  print(f"{kind}: all entries already in seeder — skipping")
+                  continue
+              src = src.replace(marker, block_txt + marker)
+              added_any = True
+              print(f"{kind}: appending {len(entries)} entries")
+
+          if added_any:
+              with open(seed_path, "w") as f:
+                  f.write(src)
+              print("SEEDER_UPDATED=yes")
+          else:
+              print("SEEDER_UPDATED=no")
           PY
+
+          if [[ "$(grep -c 'SEEDER_UPDATED=yes' /dev/stdin <<< '')" ]]; then true; fi
+          UPDATED=$(python3 -c "
+          src = open('iso/portage-seed.sh').read()
+          print('yes' if 'appended by portage-preflight self-heal' in src else 'no')
+          ")
 
           git config user.name  "nethix-preflight-bot"
           git config user.email "22435766+LoreRealm@users.noreply.github.com"
           git add iso/portage-seed.sh
-          if git diff --cached --quiet; then
+          if [[ "$UPDATED" != "yes" ]] || git diff --cached --quiet; then
             echo "SELF_HEAL_STATUS=no-changes" >> "$GITHUB_ENV"
-            echo "portage found no config changes to commit — failure was something else"
+            echo "autounmask found no NEW config changes beyond what the seeder ships — failure was something else"
             exit 1
           fi
           if ! git push origin main; then
