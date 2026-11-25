@@ -127,6 +127,12 @@ mkdir -p "$WORK/root"/var/db/repos/{nethix,gentoo} \
 mount --bind /proc "$WORK/root/proc"
 mount --bind /sys  "$WORK/root/sys"
 mount --rbind /dev "$WORK/root/dev"
+# CRITICAL: make the rbind a SLAVE. Without this, the chroot's /dev shares
+# mount propagation with the host — unmount events under the chroot's dev
+# tree propagate BACK to the host and have repeatedly torn down /dev/pts
+# (the recurring "sudo: unable to allocate pty" / Ghostty pty-exhaustion
+# breakage). Slave = events flow inward only, host is untouchable.
+mount --make-rslave "$WORK/root/dev"
 
 # generate a working locale now so every later step stops whining about
 # en_US.UTF-8 missing (stage3 ships with no locale compiled)
