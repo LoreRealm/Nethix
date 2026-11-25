@@ -24,13 +24,12 @@ BDEPEND="
     sys-devel/bc
     sys-devel/flex
     virtual/libelf
-    virtual/rust
     llvm-core/clang
     llvm-core/lld
 "
 
 # CachyOS's shipped config, hash-pinned in files/ via Manifest
-CONFIG_FILE="${FILESDIR}/config-cachyos"
+CONFIG_FILE="${FILESDIR}/config-cachynos"
 
 pkg_setup() {
     ewarn "Using the CachyOS shipped config (config-cachyos)."
