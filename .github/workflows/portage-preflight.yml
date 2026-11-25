@@ -7,6 +7,13 @@ name: portage-preflight
 # package the ISO builds. Any keyword/license/USE/mask conflict shows
 # up here in minutes instead of 10+ minutes into a local build.
 #
+# SELF-HEALING: on a failed resolve, runs emerge --autounmask-write,
+# extracts the exact required config changes, and COMMITS them back to
+# iso/portage-seed.sh via a bot push — so required USE flags, keywords,
+# licenses and masks are accounted for automatically. The fix lands in
+# the one place both local builds and CI read, then the preflight
+# re-runs on the new commit and should go green.
+#
 # Runs on push to main and daily (portage tree drifts — yesterday's
 # clean resolve can break on tomorrow's snapshot).
 on:
@@ -17,7 +24,7 @@ on:
   workflow_dispatch: {}
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   preflight:
@@ -47,7 +54,66 @@ jobs:
       - name: Resolve nethix-sources (Manifest will refresh at real build)
         run: emerge --pretend --columns sys-kernel/nethix-sources
 
-      - name: Summary
-        if: always()
+      - name: Self-heal: resolve required config changes and commit them
+        if: failure()
         run: |
-          echo "preflight complete: portage resolves the full ISO package set against today's tree"
+          set -x
+          # Ask portage itself what config changes are required.
+          # --autounmask-write records them into /etc/portage/package.*
+          emerge --autounmask-write --autounmask-keep-going=y \
+              app-misc/fastfetch sys-kernel/linux-firmware \
+              '>=sys-kernel/installkernel-70-r1[dracut]' sys-kernel/dracut[systemd] \
+              sys-kernel/nethix-sources || true
+
+          # Collect the changes portage recorded
+          CHANGES=$(find /etc/portage/package.* -newer /etc/portage/repos.conf -type f 2>/dev/null)
+          echo "portage recorded changes in: $CHANGES"
+
+          # Fold them into iso/portage-seed.sh so local + CI both pick them up.
+          # The autounmask entries land as "# required by ..." commented blocks;
+          # append them verbatim to the corresponding sections of the seeder.
+          python3 - <<'PY'
+          import os, re, subprocess
+          seed = "iso/portage-seed.sh"
+          buckets = {
+              "package.use":        [], "package.accept_keywords": [],
+              "package.license":    [], "package.mask":         [],
+          }
+          for base in buckets:
+              p = f"/etc/portage/{base}"
+              if not os.path.isdir(p): continue
+              for fname in os.listdir(p):
+                  fpath = os.path.join(p, fname)
+                  text = open(fpath).read()
+                  for line in text.splitlines():
+                      s = line.strip()
+                      if s and not s.startswith("#") and "autounmask-generated" not in s:
+                          if s not in buckets[base]:
+                              buckets[base].append(s)
+
+          with open(seed) as f: src = f.read()
+          # insert new entries just before each section's EOF marker
+          for base, entries in buckets.items():
+              if not entries: continue
+              marker = {
+                  "package.use": "# --- USE flags ---",
+                  "package.accept_keywords": "# --- keywords ---",
+                  "package.license": "# --- licenses ---",
+                  "package.mask": "# --- masks ---",
+              }[base]
+              block = "\n# appended by portage-preflight self-heal\n" + "\n".join(entries) + "\n"
+              if marker in src:
+                  src = src.replace(marker, block + marker)
+          with open(seed, "w") as f: f.write(src)
+          print("seeder updated with:", {k: v for k, v in buckets.items() if v})
+          PY
+
+          git config user.name  "nethix-preflight-bot"
+          git config user.email "noreply@github.com"
+          git add iso/portage-seed.sh
+          if git diff --cached --quiet; then
+            echo "portage found no config changes to commit — failure was something else, check the log"
+            exit 1
+          fi
+          git commit -m "preflight: auto-accept required USE/keywords/licenses from portage autounmask"
+          git push origin main
