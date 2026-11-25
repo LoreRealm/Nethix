@@ -1,6 +1,6 @@
 # Nethix
 
-Nethix is a **Gentoo-based Linux distribution** pairing Gentoo's source flexibility with CachyOS-style ergonomics: a performance-tuned EEVDF kernel, prebuilt binhost packages, a real graphical installer, and a tool suite that feels like a small adventuring party.
+Nethix is a **Gentoo-based Linux distribution** pairing Gentoo's source flexibility with CachyOS-style ergonomics: a performance-tuned EEVDF kernel, prebuilt binhost packages, a real graphical installer, and a coherent set of first-party tools.
 
 **Status: pre-alpha.** Rust workspace compiles green; nothing has booted on real hardware yet. See [TODO.md](TODO.md).
 
@@ -8,7 +8,7 @@ Nethix is a **Gentoo-based Linux distribution** pairing Gentoo's source flexibil
 
 ---
 
-## The Party
+## Components
 
 | Name | Role | State |
 |---|---|---|
@@ -16,9 +16,9 @@ Nethix is a **Gentoo-based Linux distribution** pairing Gentoo's source flexibil
 | **Forge** (`installer/forge`) | Hardware detection (chwd-style) — PCI scan → VIDEO_CARDS/drivers/firmware | ⚠️ working prototype, coarse mapping |
 | **Scri** (`installer/scri`) | AUR bridge — search/review/build PKGBUILDs via ephemeral ebuilds | ⚠️ skeleton, PKGBUILD-body scan pending |
 | **Spire** (`installer/spire`) | GUI app store — Flatpak + Scri backends in one storefront | 🚧 skeleton |
-| `cantrip-*` (`scripts/`) | Utility spells — stage, exec wrappers, update helpers | 🚧 growing |
+| `cantrip-*` (`scripts/`) | First-party CLI utilities — stage, exec wrappers, update helpers | 🚧 growing |
 
-### Supporting cast
+### Support pieces
 
 | Piece | What it does | State |
 |---|---|---|
@@ -26,7 +26,7 @@ Nethix is a **Gentoo-based Linux distribution** pairing Gentoo's source flexibil
 | `profiles.d/` | x86-64-v3/v4 tuned make.conf + binrepos.conf | ✅ ready |
 | `binhost/` | Curated Plasma desktop binary set, nightly CI build | ⚠️ untested end-to-end |
 | `iso/` | Live ISO builder (Plasma + Summon autostart) + QEMU test script | 🚧 first bring-up |
-| `configs/fastfetch/` | Pathfinder-themed fastfetch config | ✅ shipped |
+| `configs/fastfetch/` | Themed fastfetch config | ✅ shipped |
 
 Legend: ✅ works · ⚠️ written but unvalidated · 🚧 planned/in-progress
 
