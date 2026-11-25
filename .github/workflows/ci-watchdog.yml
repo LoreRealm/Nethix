@@ -1,11 +1,23 @@
 name: ci-watchdog
+# Hourly CI watchdog for the installer workspace.
+#
+# Repairs from previous revision:
+# - ISSUE DEDUP: repeated failures now COMMENT on one open issue instead
+#   of opening a new one every hour (same pattern as portage-preflight
+#   escalation). One broken overnight = one updated thread, not eight
+#   identical issues by morning.
+# - No rebuild duplication: unchanged (cargo build is cheap and the
+#   scheduled run doubles as drift detection against toolchain updates);
+#   only the reporting behavior changed.
 on:
   schedule:
     - cron: "0 * * * *"   # hourly
   workflow_dispatch: {}
+
 permissions:
   contents: read
   issues: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -15,12 +27,55 @@ jobs:
       - name: build workspace
         run: cargo test && cargo build --release
         working-directory: installer
-      - name: report failure
+      - name: capture failure details
         if: failure()
         run: |
-          gh issue create \
-            --repo LoreRealm/nethix \
-            --title "CI failed (${GITHUB_SHA::7})" \
-            --body "Automated failure report. Log tail: see run ${{ github.run_id }} at ${{ github.server_url }}/LoreRealm/nethix/actions/runs/${{ github.run_id }}"
+          {
+            echo "## CI watchdog failure"
+            echo ""
+            echo "**Commit:** ${{ github.sha }}"
+            echo "**Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo ""
+            cargo test 2>&1 | tail -100 || true
+          } > /tmp/watchdog-fail.log || true
+          tail -100 /tmp/watchdog-fail.log || true
+      - name: report failure (deduplicated)
+        if: failure()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          TITLE="ci-watchdog: installer build/test failed"
+          # dedupe: comment on an existing OPEN issue with this title
+          EXISTING=$(gh issue list --repo "$REPO" --state open --search "$TITLE" --json number --jq '.[0].number' || true)
+          BODY=$(cat <<EOF
+          ## Watchdog failure at ${{ github.sha }}
+
+          **Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          **Time:** $(date -u '+%Y-%m-%d %H:%M UTC')
+
+          Failure output is attached to the run above. Check the failing
+          step's log for the compile/test errors.
+          EOF
+          )
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$REPO" --body "Reoccurred: $BODY"
+            echo "commented on existing issue #$EXISTING"
+          else
+            gh issue create --repo "$REPO" --title "$TITLE" --body "$BODY" --label ci
+            echo "opened new issue"
+          fi
+      - name: close resolved issue on success
+        # if a previous watchdog failure was fixed, close the tracking
+        # issue automatically so the thread doesn't linger
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          TITLE="ci-watchdog: installer build/test failed"
+          EXISTING=$(gh issue list --repo "$REPO" --state open --search "$TITLE" --json number --jq '.[0].number' || true)
+          if [[ -n "$EXISTING" ]]; then
+            gh issue close "$EXISTING" --repo "$REPO" --comment "Green again at ${{ github.sha }} — closing." || true
+            echo "closed issue #$EXISTING"
+          fi
