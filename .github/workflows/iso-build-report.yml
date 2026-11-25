@@ -7,6 +7,13 @@ name: iso-build-report
 # The recommendations step pattern-matches known failure modes and prints
 # probable causes + fixes before you even open the log.
 #
+# RUNNER SELECTION: same dual-mode as portage-preflight — see the header
+# comment there. Defaults to self-hosted (private repo, metered hosted
+# minutes, one ISO build ≈ 360 hosted minutes = 18% of the monthly free
+# tier). Flip with the NETHIX_RUNNERS repo variable when budget allows:
+#   unset  → self-hosted
+#   hosted → ubuntu-latest
+#
 # Manual dispatch (heavy job), plus weekly so drift gets caught.
 on:
   workflow_dispatch: {}
@@ -22,7 +29,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.NETHIX_RUNNERS == '' && 'self-hosted' || vars.NETHIX_RUNNERS }}
     timeout-minutes: 360
     container:
       image: gentoo/stage3:latest
