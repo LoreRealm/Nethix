@@ -25,7 +25,7 @@ REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$REPO_ROOT"
 
 # self-heal the executable bit (git checkouts from zip/other hosts can lose it)
-chmod +x "$0" iso/charm-bar.sh iso/portage-seed.sh 2>/dev/null || true
+chmod +x "$0" iso/charm-bar.sh iso/portage-seed.sh scripts/*.sh 2>/dev/null || true
 
 # Progress output: SIMPLE by default — portage's own stage banners, package
 # names and errors, nothing else. The rune charm-bar (iso/charm-bar.sh) is
@@ -174,11 +174,14 @@ bash iso/portage-seed.sh "$WORK/root" "$JOBS" "$BINHOST_DIR"
 chmod 755 "$WORK/root/var/cache" "$WORK/root/var/cache/distfiles" 2>/dev/null || true
 
 # --- 3. emerge live set (fastfetch + firmware for hardware compat)
-say "emerging minimal live set + linux-firmware..."
+# sys-boot/grub is REQUIRED for stage 7 (grub-mkstandalone) — nothing else
+# pulls it in, and a build without it dies at the last step with
+# "grub-mkstandalone: No such file or directory".
+say "emerging minimal live set + linux-firmware + grub..."
 run_charm "conjuring live set" chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 /bin/bash -c '
     set -e
     emerge-webrsync || emerge --sync || true
-    emerge --autounmask-write app-misc/fastfetch sys-kernel/linux-firmware
+    emerge --autounmask-write app-misc/fastfetch sys-kernel/linux-firmware sys-boot/grub
 '
 say "live set installed (firmware adds ~700MB to the squashfs — expected)"
 
@@ -261,14 +264,21 @@ chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 \
 # zstd -15 instead of -19: ~2-4% larger ISO, ~2x faster packing. Level 19
 # on a live root is a poor cost/benefit for a build artifact. -quiet +
 # -no-progress kill the per-byte spinner spam; the stage banner is enough.
+# EXCLUDE the bind-mounted virtfs trees: without -e, mksquashfs walks the
+# mounted /proc /sys /dev into the image — the observed result was a
+# 6.6 GB squashfs full of host sysfs snapshots (413K llistxattr warnings)
+# instead of a ~2.5 GB clean root. The live boot overlays fresh virtfs
+# anyway, so the packed copies are pure dead weight.
 say "packing squashfs..."
 mkdir -p "$WORK/iso-root"
 mksquashfs "$WORK/root" "$WORK/iso-root/live.squashfs" \
     -comp zstd -Xcompression-level 15 \
     -processors "$JOBS" \
+    -wildcards -e 'proc/*' 'sys/*' 'dev/*' 'run/*' 'tmp/*' \
     -quiet -no-progress
 
 KIMG=$(ls "$WORK/root/boot"/vmlinuz-* 2>/dev/null | head -n1)
+[[ -n "$KIMG" ]] || KIMG=$(ls "$WORK/root/boot"/kernel-* 2>/dev/null | head -n1)
 [[ -n "$KIMG" ]] || die "no kernel image in chroot /boot"
 INITRD=$(ls "$WORK/root/boot"/initramfs-*.img 2>/dev/null | head -n1)
 [[ -n "$INITRD" ]] || die "no initramfs in chroot /boot"
@@ -288,11 +298,21 @@ menuentry "Nethix Live" {
 EOF
 cp "$WORK/root/boot/grub/grub.cfg" "$WORK/iso-root/grub-live.cfg"
 
+# Slim standalone images: default mkstandalone embeds EVERY module plus
+# the unicode font/themes/locales and blows past the 0x78000 (512K) BIOS
+# core limit ("core image is too big"). Embed only what the live boot
+# needs (linux, normal, configfile) and strip fonts/themes/locales —
+# the menu renders in the built-in ASCII font, which is fine for a
+# single "Nethix Live" entry.
 chroot "$WORK/root" grub-mkstandalone \
+    --install-modules="linux normal configfile test all_video" \
+    --fonts= --themes= --locales= \
     -O x86_64-efi -o /tmp/nethix-efi.img \
     "boot/grub/grub.cfg=/boot/grub/grub.cfg" \
 || die "grub-mkstandalone EFI failed (is sys-boot/grub emerged in the chroot?)"
 chroot "$WORK/root" grub-mkstandalone \
+    --install-modules="linux normal configfile biosdisk" \
+    --fonts= --themes= --locales= \
     -O i386-pc -o /tmp/nethix-bios.img \
     "boot/grub/grub.cfg=/boot/grub/grub.cfg" \
 || die "grub-mkstandalone BIOS failed"
