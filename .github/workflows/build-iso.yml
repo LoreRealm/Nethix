@@ -17,17 +17,30 @@ jobs:
       - name: Install build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y squashfs-tools xorriso curl tar dosfstools
+          sudo apt-get install -y squashfs-tools xorriso curl tar dosfstools qemu-system-x86
 
       - name: Build the ISO
         run: |
           chmod +x iso/build.sh
           sudo ./iso/build.sh
 
+      - name: Boot-test the ISO (headless QEMU, serial watched)
+        run: |
+          chmod +x iso/test-local.sh
+          sudo env LOG="$PWD/boot-serial.log" TIMEOUT=1200 ./iso/test-local.sh nethix-live-alpha.iso
+
+      - name: Show serial log on test failure
+        if: failure()
+        run: |
+          echo "--- last 120 lines of serial output ---"
+          tail -n 120 boot-serial.log || true
+
       - name: Upload ISO artifact
         uses: actions/upload-artifact@v4
         with:
           name: nethix-live-iso
-          path: iso/*.iso
+          path: |
+            iso/*.iso
+            boot-serial.log
           if-no-files-found: error
           retention-days: 90
