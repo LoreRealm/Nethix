@@ -8,7 +8,7 @@
 #   4. installer binaries — pulled from nethix-artifacts repo (public)
 #   5. liveuser
 #   6. kernel + initramfs via portage (kernel-build eclass + installkernel/dracut)
-#   7. squashfs + xorriso into ISO
+#   7. squashfs + ISO assembly via grub-mkrescue
 #   8. binhost export — collect built .tbz2 packages for reuse
 #
 # Requirements: ~35 GB free (firmware is chunky). Run from anywhere —
@@ -174,14 +174,14 @@ bash iso/portage-seed.sh "$WORK/root" "$JOBS" "$BINHOST_DIR"
 chmod 755 "$WORK/root/var/cache" "$WORK/root/var/cache/distfiles" 2>/dev/null || true
 
 # --- 3. emerge live set (fastfetch + firmware for hardware compat)
-# sys-boot/grub is REQUIRED for stage 7 (grub-mkstandalone) — nothing else
-# pulls it in, and a build without it dies at the last step with
-# "grub-mkstandalone: No such file or directory".
-say "emerging minimal live set + linux-firmware + grub..."
+# sys-boot/grub is REQUIRED for stage 7 (boot images). dev-libs/libisoburn
+# (xorriso) and sys-fs/mtools are needed by grub-mkrescue for ISO assembly
+# and the FAT ESP image inside it.
+say "emerging minimal live set + linux-firmware + grub + iso tools..."
 run_charm "conjuring live set" chroot "$WORK/root" env LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 /bin/bash -c '
     set -e
     emerge-webrsync || emerge --sync || true
-    emerge --autounmask-write app-misc/fastfetch sys-kernel/linux-firmware sys-boot/grub
+    emerge --autounmask-write app-misc/fastfetch sys-kernel/linux-firmware sys-boot/grub dev-libs/libisoburn sys-fs/mtools
 '
 say "live set installed (firmware adds ~700MB to the squashfs — expected)"
 
@@ -286,50 +286,45 @@ INITRD=$(ls "$WORK/root/boot"/initramfs-*.img 2>/dev/null | head -n1)
 cp "$KIMG" "$WORK/iso-root/vmlinuz"
 cp "$INITRD" "$WORK/iso-root/initramfs.img"
 
-say "assembling ISO..."
-# grub config lives INSIDE the chroot where grub-mkstandalone expects it
-mkdir -p "$WORK/root/boot/grub"
-cat > "$WORK/root/boot/grub/grub.cfg" <<'EOF'
+# grub.cfg: console=tty0 console=ttyS0,115200 puts kernel output on BOTH the
+# VGA console and the serial port. Without a serial console, headless VM
+# boot tests (test-local.sh, QEMU -nographic, CI serial capture) see
+# NOTHING during boot — the original "INCONCLUSIVE rc=124" mystery.
+# Also keep a copy at the ISO root as grub-live.cfg for reference/debugging.
+mkdir -p "$WORK/iso-root/boot/grub"
+cat > "$WORK/iso-root/boot/grub/grub.cfg" <<'EOF'
 set timeout=5
 menuentry "Nethix Live" {
-    linux /vmlinuz root=live:CDLABEL=NETHIX_LIVE rd.live.image rd.live.squashimg=live.squashfs
+    linux /vmlinuz root=live:CDLABEL=NETHIX_LIVE rd.live.image rd.live.squashimg=live.squashfs console=tty0 console=ttyS0,115200
     initrd /initramfs.img
 }
 EOF
-cp "$WORK/root/boot/grub/grub.cfg" "$WORK/iso-root/grub-live.cfg"
+cp "$WORK/iso-root/boot/grub/grub.cfg" "$WORK/iso-root/grub-live.cfg"
 
-# Slim standalone images: default mkstandalone embeds EVERY module plus
-# the unicode font/themes/locales and blows past the 0x78000 (512K) BIOS
-# core limit ("core image is too big"). Embed only what the live boot
-# needs (linux, normal, configfile) and strip fonts/themes/locales —
-# the menu renders in the built-in ASCII font, which is fine for a
-# single "Nethix Live" entry.
-chroot "$WORK/root" grub-mkstandalone \
-    --install-modules="linux normal configfile test all_video" \
-    --fonts= --themes= --locales= \
-    -O x86_64-efi -o /tmp/nethix-efi.img \
-    "boot/grub/grub.cfg=/boot/grub/grub.cfg" \
-|| die "grub-mkstandalone EFI failed (is sys-boot/grub emerged in the chroot?)"
-chroot "$WORK/root" grub-mkstandalone \
-    --install-modules="linux normal configfile biosdisk" \
-    --fonts= --themes= --locales= \
-    -O i386-pc -o /tmp/nethix-bios.img \
-    "boot/grub/grub.cfg=/boot/grub/grub.cfg" \
-|| die "grub-mkstandalone BIOS failed"
-cp "$WORK/root/tmp/nethix-efi.img" "$WORK/iso-root/efi-boot.img"
-cp "$WORK/root/tmp/nethix-bios.img" "$WORK/iso-root/bios-boot.img"
-
-xorriso -as mkisofs -iso-level 3 -volid NETHIX_LIVE \
-    -graft-points \
-    -o "$REPO_ROOT/$OUT_ISO" \
-    -b bios-boot.img -no-emul-boot \
-    --efi-boot efi-boot.img \
-    /vmlinuz="$WORK/iso-root/vmlinuz" \
-    /initramfs.img="$WORK/iso-root/initramfs.img" \
-    /live.squashfs="$WORK/iso-root/live.squashfs" \
-    /grub-live.cfg="$WORK/iso-root/grub-live.cfg" \
-    /efi-boot.img="$WORK/iso-root/efi-boot.img" \
-    /bios-boot.img="$WORK/iso-root/bios-boot.img"
+# ISO assembly: grub-mkrescue builds the ENTIRE boot machinery itself —
+# i386-pc core + EFI FAT image + El Torito catalog + MBR hybrid system
+# area — with correct -boot-info-table patching that the hand-rolled
+# "xorriso -as mkisofs + grub-mkstandalone" pipeline kept getting wrong.
+# Every hand-assembled variant (slim modules, stripped fonts, enriched
+# module sets, corrected El Torito flags, host-grub images) produced a
+# bios-boot.img that SeaBIOS executes as garbage bytes; a stock
+# grub-mkrescue ISO booted GRUB flawlessly on the same host. Lesson
+# taken: stop hand-building what mkrescue builds correctly.
+# grub-mkrescue grafts iso-root as the ISO filesystem, so vmlinuz,
+# initramfs.img, live.squashfs and boot/grub/grub.cfg all land on the
+# disc, and it reads boot/grub/grub.cfg from the source tree too.
+#   - -volid NETHIX_LIVE keeps root=live:CDLABEL=NETHIX_LIVE working.
+#   - -compliance iso_level=3 raises the per-file size cap from 4 GiB
+#     (live.squashfs exceeds it; iso_level 1 is xorriso's default and
+#     kills the run with "File exceeds size limit of 4294967295 bytes").
+#   - EFI FAT image generation needs mtools (sys-fs/mtools, emerged above).
+say "assembling ISO via grub-mkrescue..."
+rm -f "$REPO_ROOT/$OUT_ISO"
+chroot "$WORK/root" grub-mkrescue -o "/out.iso" "$WORK/iso-root" \
+    -- -volid NETHIX_LIVE -compliance iso_level=3 \
+    || die "grub-mkrescue failed"
+mv "$WORK/root/out.iso" "$REPO_ROOT/$OUT_ISO" \
+    || die "ISO not found after grub-mkrescue (did it write /out.iso?)"
 
 [[ -f "$REPO_ROOT/$OUT_ISO" ]] || die "ISO output missing"
 
