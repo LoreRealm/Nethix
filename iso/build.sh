@@ -67,7 +67,7 @@ WORK="$REPO_ROOT/.iso-build"
 STAGE3_URL=${STAGE3_URL:-https://distfiles.gentoo.org/releases/amd64/autobuilds/current-stage3-amd64-systemd/}
 OUT_ISO=${OUT_ISO:-nethix-live-alpha.iso}
 ARTIFACTS_REPO=${ARTIFACTS_REPO:-LoreRealm/nethix-artifacts}
-ARTIFACTS_ASSET={ARTIFACTS_ASSET:-nethix-installer-binaries.zip}
+ARTIFACTS_ASSET=${ARTIFACTS_ASSET:-nethix-installer-binaries.zip}
 KERNEL_PV=${KERNEL_PV:-7.3.6}
 
 say() { printf '\e[1;36m::\e[0m %s\n' "$*"; }
