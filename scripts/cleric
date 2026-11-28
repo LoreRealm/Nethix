@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+# cleric — Nethix system doctor.
+#
+# Examines logs, services, filesystem, portage and hardware state; diagnoses
+# problems; applies safe fixes automatically (opt-in per category), and
+# files a GitHub issue for anything it can't fix, with logs attached and
+# sensitive data scrubbed.
+#
+# Usage:
+#   cleric                    — full check of EVERYTHING (diagnose only)
+#   cleric --fix              — check everything, apply safe fixes (asks first)
+#   cleric --fix --yes        — non-interactive auto-fix (cron/scheduled)
+#   cleric --report           — diagnose only + print GitHub issue drafts
+#   cleric --category <name>  — run a single category (boot, portage, ...)
+#   cleric --list             — list available check categories
+#
+# Structure: this dispatcher + cleric.d/<category>.sh spells. Each spell:
+#   - is standalone bash, sourced with NO args by the dispatcher
+#   - defines: NAME, DESCRIPTION, run_check() -> sets FINDINGS/SEVERITY
+#   - may define: try_fix() -> 0 if fix applied, 1 if unfixable
+# Safe fixes are opt-in: a category's try_fix only runs under --fix, and
+# only if listed in /etc/nethix/cleric.conf SAFE_FIXES (default: all).
+#
+# Requirements: root for full scan (journal access, quickpkg etc.);
+# non-root runs a reduced read-only scan.
+set -uo pipefail
+
+VERSION="0.1.0"
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+SPELLS_DIR="${SCRIPT_DIR}/cleric.d"
+CONF_FILE="/etc/nethix/cleric.conf"
+
+# --- defaults (overridable via $CONF_FILE) ---
+GITHUB_REPO="LoreRealm/Nethix"          # where unfixable issues get filed
+ISSUE_LABEL="cleric"
+SCRUB_USERNAMES="yes"                   # strip usernames/hostname from reports
+# Categories whose try_fix is considered SAFE. Empty/unset = all spells may fix.
+SAFE_FIXES=""
+
+[[ -f "$CONF_FILE" ]] && source "$CONF_FILE"
+
+# --- output helpers ---
+c_reset='\e[0m'; c_bold='\e[1m'; c_ok='\e[1;32m'; c_warn='\e[1;33m'
+c_err='\e[1;31m'; c_head='\e[1;36m'
+say()      { printf "${c_head}::${c_reset} %s\n" "$*"; }
+ok()       { printf "  ${c_ok}OK${c_reset}  %s\n" "$*"; }
+warn()     { printf "  ${c_warn}!!${c_reset}  %s\n" "$*"; }
+err()      { printf "  ${c_err}XX${c_reset}  %s\n" "$*"; }
+
+FIX_MODE=0; YES=0; REPORT_ONLY=0; CATEGORY=""
+declare -a ISSUE_DRAFTS=()
+
+# --- arg parsing ---
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --fix) FIX_MODE=1 ;;
+        --yes|-y) YES=1 ;;
+        --report) REPORT_ONLY=1 ;;
+        --category) shift; CATEGORY="${1:-}" ;;
+        --list)
+            for f in "$SPELLS_DIR"/*.sh; do
+                [[ -f "$f" ]] || continue
+                NAME=""; DESCRIPTION=""
+                source "$f"
+                printf '%-14s %s\n' "$NAME" "$DESCRIPTION"
+                NAME=""; DESCRIPTION=""
+            done
+            exit 0 ;;
+        --help|-h)
+            sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+            exit 0 ;;
+        *) printf 'unknown option: %s (see --help)\n' "$1" >&2; exit 2 ;;
+    esac
+    shift
+done
+
+# --- scrubbing for outbound reports ---
+scrub() {
+    local text="$1"
+    if [[ "$SCRUB_USERNAMES" == "yes" ]]; then
+        text=$(sed -e "s/$(whoami 2>/dev/null || echo __none__)/USER/g" \
+                    -e "s/$(hostname 2>/dev/null || echo __none__)/HOST/g" \
+                    <<<"$text")
+    fi
+    printf '%s' "$text"
+}
+
+gh_available() { command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; }
+
+file_issue() {
+    # $1 title, $2 body (will be scrubbed)
+    local title="$1" body
+    body=$(scrub "$2")
+    if gh_available; then
+        gh issue create --repo "$GITHUB_REPO" --label "$ISSUE_LABEL" \
+            --title "$title" --body "$body" && return 0
+        warn "gh issue create failed — printed draft below instead"
+    fi
+    ISSUE_DRAFTS+=("TITLE: $title
+
+$body")
+    return 1
+}
+
+# --- run every spell ---
+RAN_ANY=0
+shopt -s nullglob
+for spell in "$SPELLS_DIR"/*.sh; do
+    [[ -z "$CATEGORY" ]] || [[ "$spell" == *"${CATEGORY}.sh" ]] || continue
+
+    # each spell must define NAME, DESCRIPTION, run_check()
+    NAME=""; DESCRIPTION=""; FINDINGS=""; SEVERITY="ok"; HAS_FIX=0
+    source "$spell"
+
+    [[ -n "$NAME" ]] || continue
+    RAN_ANY=1
+    say "checking: $NAME ($DESCRIPTION)"
+
+    SEVERITY="ok"; FINDINGS=""
+    run_check
+    RAN_ANY=1
+
+    case "$SEVERITY" in
+        ok)   [[ -n "$FINDINGS" ]] && ok "$FINDINGS" || ok "no issues" ;;
+        warn) warn "$FINDINGS" ;;
+        fail) err "$FINDINGS" ;;
+    esac
+
+    # auto-fix path
+    if [[ "$SEVERITY" != "ok" && $FIX_MODE -eq 1 ]]; then
+        if declare -f try_fix >/dev/null; then
+            if [[ -z "$SAFE_FIXES" ]] || [[ ",$SAFE_FIXES," == *",$NAME,"* ]]; then
+                if [[ $YES -eq 0 ]]; then
+                    read -rp "  apply safe fix for $NAME? [y/N] " ans
+                else
+                    ans="y"
+                fi
+                if [[ "$ans" == "y" || "$ans" == "Y" ]]; then
+                    if try_fix; then ok "fix applied for $NAME"
+                    else err "fix failed or not possible for $NAME — filing issue"
+                         file_issue "cleric: $NAME check failed: $FINDINGS" \
+                             "Cleric category: $NAME
+Severity: $SEVERITY
+
+Finding:
+$FINDINGS
+
+System context (scrubbed):
+$(scrub "$(uname -a; command -v forge >/dev/null && forge --summary 2>/dev/null || true)")" || true
+                    fi
+                fi
+            else
+                warn "$NAME not in SAFE_FIXES — skipping auto-fix (add to $CONF_FILE to enable)"
+            fi
+        else
+            err "no known fix for: $FINDINGS — filing issue"
+            file_issue "cleric: $NAME check failed: $FINDINGS" \
+"Cleric category: $NAME
+Severity: $SEVERITY
+
+Finding:
+$FINDINGS
+
+Detected automatically by cleric. No automated fix is known for this issue." || true
+        fi
+    elif [[ "$SEVERITY" != "ok" && $REPORT_ONLY -eq 1 ]]; then
+        ISSUE_DRAFTS+=("TITLE: cleric: $NAME check failed: $FINDINGS
+$(scrub "$FINDINGS")")
+    fi
+
+    NAME=""; DESCRIPTION=""; FINDINGS=""; SEVERITY="ok"
+    unset -f try_fix 2>/dev/null || true
+done
+shopt -u nullglob
+
+(( RAN_ANY )) || { err "no spells found in $SPELLS_DIR"; exit 1; }
+
+# --- summary ---
+say "cleric scan complete."
+if (( ${#ISSUE_DRAFTS[@]} )); then
+    warn "${#ISSUE_DRAFTS[@]} unfiled issue draft(s) (gh unavailable or failed):"
+    printf '%s\n' "${ISSUE_DRAFTS[@]}"
+fi
+exit 0
