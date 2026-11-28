@@ -1,0 +1,15 @@
+# /etc/cleric.conf — cleric configuration (copy to /etc/cleric.conf)
+
+# Where unfixable issues get filed (owner/repo). Leave empty to never file
+# and always print drafts instead.
+GITHUB_REPO=""
+
+# Label applied to filed issues.
+ISSUE_LABEL="cleric"
+
+# Strip username/hostname from outbound reports.
+SCRUB_USERNAMES="yes"
+
+# Categories whose try_fix may run under `cleric --fix`.
+# Space- or comma-separated list of NAMEs. Empty = all spells may fix.
+SAFE_FIXES=""
