@@ -1,0 +1,58 @@
+# subtree-sync: one-way automated mirror commits between LoreRealm repos.
+#
+# What it does: checks out LoreRealm/cleric (runebar.sh etc.) into
+# LoreRealm/Nethix under `shared/cleric/` every morning at 06:15 UTC, and
+# commits the result on Nethix/main as "[sync] cleric -> Nethix shared copy".
+# Includes runebar.sh (the shared progress bar), install.sh, cleric.d/*,
+# README — everything Nethix tools source.
+#
+# What it deliberately does NOT do: reverse-direction commits, rebases,
+# history preservation (single squash commit per sync), pushing tags, or
+# touching any path outside shared/cleric/.
+#
+# Required secrets in the target repo:
+#   SYNC_PAT  — fine-grained PAT with Contents: read+write on BOTH repos
+#
+# Notes:
+# - All commits land on `main` directly; no branches or PRs to review.
+# - If Nethix's main has unmerged local work, sync may conflict; it force-
+#   resets only the shared/cleric/ subtree, never the whole tree.
+# - Run this file as GitHub Actions (`.github/workflows/subtree-sync.yml`).
+name: Subtree sync
+on:
+  schedule:
+    - cron: '15 6 * * *'   # daily, 06:15 UTC
+  workflow_dispatch: {}    # allow manual trigger
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: LoreRealm/Nethix
+          token: ${{ secrets.SYNC_PAT }}
+          fetch-depth: 1
+      - name: Sync cleric subtree into Nethix/shared/cleric
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_PAT }}
+        run: |
+          git config user.name "cleric-subtree-bot"
+          git config user.email "cleric-subtree-bot@users.noreply.github.com"
+          mkdir -p shared/cleric
+          # fetch each file from the cleric repo via API (no git clone needed)
+          for f in runebar.sh install.sh README.md LICENSE cleric.conf.example cleric; do
+            gh api "repos/LoreRealm/cleric/contents/$f" --jq '.content' | base64 -d > "shared/cleric/$f"
+          done
+          mkdir -p shared/cleric/cleric.d
+          gh api repos/LoreRealm/cleric/contents/cleric.d --jq '.[].name' | while read -r f; do
+            gh api "repos/LoreRealm/cleric/contents/cleric.d/$f" --jq '.content' | base64 -d > "shared/cleric/cleric.d/$f"
+          done
+          if [[ -n "$(git status --porcelain shared/cleric)" ]]; then
+            git add shared/cleric
+            git commit -m "[sync] cleric -> Nethix shared copy"
+            git push origin main
+          else
+            echo "no changes"
+          fi
